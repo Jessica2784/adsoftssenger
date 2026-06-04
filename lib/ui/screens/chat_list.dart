@@ -1,24 +1,48 @@
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
 
 import '../../data/dummy_data.dart';
-import '../../models/chat_model.dart';
 import '../../models/user_model.dart';
+import '../../services/api_service.dart';
+import '../../services/conversacion_service.dart';
 import '../../widgets/user_avatar.dart';
 import 'chat_detail.dart';
-import 'new_chat_dialog.dart';
 
 class ChatListScreen extends StatefulWidget {
-  const ChatListScreen({super.key});
+  const ChatListScreen({super.key, this.usuarioId});
+
+  final Object? usuarioId;
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  final ConversacionService _conversacionService = ConversacionService();
+
+  late Future<List<_ConversationPreview>> _conversacionesFuture;
+  late String _loadedUsuarioId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadedUsuarioId = _resolveUsuarioId();
+    _conversacionesFuture = _loadConversaciones(_loadedUsuarioId);
+  }
+
+  @override
+  void dispose() {
+    _conversacionService.close();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final chats = DummyData.visibleChats;
+    final usuarioId = _resolveUsuarioId();
+    if (_loadedUsuarioId != usuarioId) {
+      _loadedUsuarioId = usuarioId;
+      _conversacionesFuture = _loadConversaciones(usuarioId);
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -34,6 +58,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
             showStatusRing: true,
           ),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Actualizar',
+            icon: const Icon(Icons.refresh),
+            onPressed: _retryLoad,
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
@@ -55,139 +86,134 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   ],
                 ),
               ),
-              Expanded(
-                child: chats.isEmpty
-                    ? _buildEmptyState(context)
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
-                        itemCount: chats.length,
-                        itemBuilder: (context, index) {
-                          final Chat chat = chats[index];
-                          final User contact = DummyData.contactFor(chat);
-                          final hasUnread = DummyData.hasUnread(chat);
-
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              side: BorderSide(
-                                color: hasUnread
-                                    ? colorScheme.primary.withValues(
-                                        alpha: 0.35,
-                                      )
-                                    : colorScheme.outlineVariant.withValues(
-                                        alpha: 0.6,
-                                      ),
-                              ),
-                            ),
-                            child: ListTile(
-                              minVerticalPadding: 12,
-                              leading: UserAvatar(
-                                user: contact,
-                                radius: 25,
-                                showStatusRing: true,
-                              ),
-                              title: Text(
-                                contact.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w800
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                              subtitle: Text(
-                                DummyData.lastMessageFor(chat),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: hasUnread
-                                      ? colorScheme.onSurface
-                                      : colorScheme.onSurfaceVariant,
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w700
-                                      : FontWeight.w400,
-                                ),
-                              ),
-                              trailing: _buildTrailing(
-                                context,
-                                time: DummyData.lastTimeFor(chat),
-                                hasUnread: hasUnread,
-                              ),
-                              onTap: () async {
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => ChatDetailScreen(
-                                      contact: contact,
-                                      chatId: chat.id,
-                                    ),
-                                  ),
-                                );
-                                if (mounted) setState(() {});
-                              },
-                            ),
-                          );
-                        },
-                      ),
-              ),
+              Expanded(child: _buildConversationList(context)),
             ],
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await showDialog<bool>(
-            context: context,
-            builder: (_) => const NewChatDialog(),
+    );
+  }
+
+  String _resolveUsuarioId() {
+    return '1';
+  }
+
+  Future<List<_ConversationPreview>> _loadConversaciones(
+    String usuarioId,
+  ) async {
+    foundation.debugPrint('Chats usuarioActualId usado: $usuarioId');
+
+    final response = await _conversacionService.obtenerConversacionesPorUsuario(
+      usuarioId,
+    );
+
+    return response.map(_ConversationPreview.fromJson).toList(growable: false);
+  }
+
+  void _retryLoad() {
+    setState(() {
+      _conversacionesFuture = _loadConversaciones(_loadedUsuarioId);
+    });
+  }
+
+  Widget _buildConversationList(BuildContext context) {
+    return FutureBuilder<List<_ConversationPreview>>(
+      future: _conversacionesFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting ||
+            snapshot.connectionState == ConnectionState.active) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return _buildErrorState(context, snapshot.error);
+        }
+
+        final conversaciones = snapshot.data ?? const <_ConversationPreview>[];
+        if (conversaciones.isEmpty) {
+          return _buildEmptyState(context);
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
+          itemCount: conversaciones.length,
+          itemBuilder: (context, index) {
+            return _buildConversationTile(context, conversaciones[index]);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildConversationTile(
+    BuildContext context,
+    _ConversationPreview conversation,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.6),
+        ),
+      ),
+      child: ListTile(
+        minVerticalPadding: 12,
+        leading: _ConversationAvatar(
+          name: conversation.nombreContacto,
+          imageUrl: conversation.fotoContactoUrl,
+          radius: 25,
+        ),
+        title: Text(
+          conversation.nombreContacto,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          conversation.ultimoMensaje,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+        trailing: _buildTrailing(
+          context,
+          time: conversation.fechaUltimoMensaje,
+        ),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ChatScreen(
+                conversacionId: conversation.id,
+                usuarioActualId: _loadedUsuarioId,
+                nombreContacto: conversation.nombreContacto,
+                fotoContactoUrl: conversation.fotoContactoUrl,
+              ),
+            ),
           );
-          if (created == true && mounted) setState(() {});
+
+          if (mounted) _retryLoad();
         },
-        icon: const Icon(Icons.add_comment),
-        label: const Text('Nuevo chat'),
       ),
     );
   }
 
-  Widget _buildTrailing(
-    BuildContext context, {
-    required String time,
-    required bool hasUnread,
-  }) {
+  Widget _buildTrailing(BuildContext context, {required String time}) {
+    if (time.isEmpty) return const SizedBox.shrink();
+
     final colorScheme = Theme.of(context).colorScheme;
 
     return SizedBox(
-      width: 58,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            time,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: hasUnread
-                  ? colorScheme.primary
-                  : colorScheme.onSurfaceVariant,
-              fontSize: 12,
-              fontWeight: hasUnread ? FontWeight.w700 : FontWeight.w400,
-            ),
-          ),
-          if (hasUnread) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(
-                color: colorScheme.primary,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ],
-        ],
+      width: 78,
+      child: Text(
+        time,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.end,
+        style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
       ),
     );
   }
@@ -198,9 +224,38 @@ class _ChatListScreenState extends State<ChatListScreen> {
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Text(
-          'Este perfil todavía no tiene conversaciones.',
+          'No hay conversaciones para mostrar.',
           textAlign: TextAlign.center,
           style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(BuildContext context, Object? error) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final message = error is ApiException
+        ? error.message
+        : 'No se pudieron cargar las conversaciones.';
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _retryLoad,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+            ),
+          ],
         ),
       ),
     );
@@ -277,6 +332,139 @@ class _ChatListScreenState extends State<ChatListScreen> {
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConversationPreview {
+  final String id;
+  final String nombreContacto;
+  final String fotoContactoUrl;
+  final String ultimoMensaje;
+  final String fechaUltimoMensaje;
+
+  const _ConversationPreview({
+    required this.id,
+    required this.nombreContacto,
+    required this.fotoContactoUrl,
+    required this.ultimoMensaje,
+    required this.fechaUltimoMensaje,
+  });
+
+  factory _ConversationPreview.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('La conversacion recibida no es valida.');
+    }
+
+    final map = Map<String, dynamic>.from(json);
+
+    return _ConversationPreview(
+      id: _requiredText(map['id'], 'id'),
+      nombreContacto: _optionalText(
+        map['nombreContacto'],
+        fallback: 'Contacto sin nombre',
+      ),
+      fotoContactoUrl: _optionalText(map['fotoContactoUrl']),
+      ultimoMensaje: _optionalText(
+        map['ultimoMensaje'],
+        fallback: 'Sin mensajes',
+      ),
+      fechaUltimoMensaje: _formatDate(map['fechaUltimoMensaje']),
+    );
+  }
+
+  static String _requiredText(Object? value, String fieldName) {
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      throw FormatException('La conversacion no tiene $fieldName.');
+    }
+    return text;
+  }
+
+  static String _optionalText(Object? value, {String fallback = ''}) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  static String _formatDate(Object? value) {
+    final rawDate = value?.toString().trim() ?? '';
+    if (rawDate.isEmpty) return '';
+
+    final parsedDate = DateTime.tryParse(rawDate);
+    if (parsedDate == null) return rawDate;
+
+    final localDate = parsedDate.toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final messageDay = DateTime(localDate.year, localDate.month, localDate.day);
+
+    if (messageDay == today) {
+      final hour = localDate.hour % 12 == 0 ? 12 : localDate.hour % 12;
+      final minute = localDate.minute.toString().padLeft(2, '0');
+      final period = localDate.hour >= 12 ? 'PM' : 'AM';
+      return '$hour:$minute $period';
+    }
+
+    if (messageDay == today.subtract(const Duration(days: 1))) {
+      return 'Ayer';
+    }
+
+    return '${localDate.day}/${localDate.month}/${localDate.year}';
+  }
+}
+
+class _ConversationAvatar extends StatelessWidget {
+  const _ConversationAvatar({
+    required this.name,
+    required this.imageUrl,
+    required this.radius,
+  });
+
+  final String name;
+  final String imageUrl;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedUrl = imageUrl.trim();
+
+    return SizedBox.square(
+      dimension: radius * 2,
+      child: ClipOval(
+        child: trimmedUrl.isEmpty
+            ? _fallback(context)
+            : Image.network(
+                trimmedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _fallback(context),
+              ),
+      ),
+    );
+  }
+
+  Widget _fallback(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part.characters.first.toUpperCase())
+        .join();
+
+    return ColoredBox(
+      color: colorScheme.primaryContainer,
+      child: Center(
+        child: Text(
+          initials.isEmpty ? '?' : initials,
+          style: TextStyle(
+            color: colorScheme.onPrimaryContainer,
+            fontSize: radius * 0.55,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

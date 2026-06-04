@@ -1,13 +1,9 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
-import '../../data/dummy_data.dart';
-import '../../models/user_model.dart';
-import '../../widgets/user_avatar.dart';
+import '../../services/api_service.dart';
+import '../../services/conversacion_service.dart';
+import '../../services/usuario_service.dart';
 import 'chat_detail.dart';
-import 'register_user_screen.dart';
 
 class PeopleListScreen extends StatefulWidget {
   const PeopleListScreen({super.key});
@@ -17,22 +13,37 @@ class PeopleListScreen extends StatefulWidget {
 }
 
 class _PeopleListScreenState extends State<PeopleListScreen> {
+  static const int _usuarioActualId = 1;
+
   final TextEditingController _searchController = TextEditingController();
-  final ImagePicker _imagePicker = ImagePicker();
+  final UsuarioService _usuarioService = UsuarioService();
+  final ConversacionService _conversacionService = ConversacionService();
+
+  List<_ApiUser> _users = [];
+  Object? _loadError;
   int _selectedView = 0;
+  int? _openingUserId;
   bool _isSearching = false;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUsers();
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _usuarioService.close();
+    _conversacionService.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final users = DummyData.activeUsers;
-    final visibleUsers = _filterUsers(users, _searchController.text);
+    final contacts = _filterUsers(_contactUsers, _searchController.text);
 
     return Scaffold(
       appBar: AppBar(
@@ -88,33 +99,78 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
               Expanded(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 180),
-                  child: _selectedView == 0
-                      ? _buildContactsList(context, visibleUsers)
-                      : _buildStoriesList(context, visibleUsers, colorScheme),
+                  child: _buildCurrentView(context, contacts, colorScheme),
                 ),
               ),
             ],
           ),
         ),
       ),
-      floatingActionButton: _selectedView == 0
-          ? FloatingActionButton.extended(
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const RegisterUserScreen()),
-                );
-                if (mounted) setState(() {});
-              },
-              icon: const Icon(Icons.person_add),
-              label: const Text('Registrar'),
-            )
-          : FloatingActionButton.extended(
-              onPressed: _showStatusComposer,
-              icon: const Icon(Icons.add_circle),
-              label: const Text('Nuevo estado'),
-            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _loadUsers,
+        icon: const Icon(Icons.refresh),
+        label: const Text('Actualizar'),
+      ),
     );
+  }
+
+  List<_ApiUser> get _contactUsers {
+    return _users
+        .where((user) => user.id != _usuarioActualId)
+        .toList(growable: false);
+  }
+
+  _ApiUser? get _currentUser {
+    for (final user in _users) {
+      if (user.id == _usuarioActualId) return user;
+    }
+    return null;
+  }
+
+  Widget _buildCurrentView(
+    BuildContext context,
+    List<_ApiUser> contacts,
+    ColorScheme colorScheme,
+  ) {
+    if (_isLoading) {
+      return const Center(
+        key: ValueKey('people-loading'),
+        child: CircularProgressIndicator(),
+      );
+    }
+
+    if (_loadError != null) {
+      return _buildErrorState(context);
+    }
+
+    return _selectedView == 0
+        ? _buildContactsList(context, contacts)
+        : _buildStoriesList(context, contacts, colorScheme);
+  }
+
+  Future<void> _loadUsers() async {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
+
+    try {
+      final response = await _usuarioService.obtenerUsuarios();
+      final users = response.map(_ApiUser.fromJson).toList(growable: false)
+        ..sort((a, b) => a.nombreMostrar.compareTo(b.nombreMostrar));
+
+      if (!mounted) return;
+      setState(() {
+        _users = users;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error;
+        _isLoading = false;
+      });
+    }
   }
 
   void _toggleSearch() {
@@ -124,255 +180,88 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     });
   }
 
-  List<User> _filterUsers(List<User> users, String query) {
+  List<_ApiUser> _filterUsers(List<_ApiUser> users, String query) {
     final normalizedQuery = query.trim().toLowerCase();
     if (normalizedQuery.isEmpty) return users;
 
     return users
         .where((user) {
           final searchableText = [
-            user.name,
-            user.description ?? '',
-            for (final status in user.statuses) status.note,
+            user.nombreMostrar,
+            user.nombreUsuario,
           ].join(' ').toLowerCase();
           return searchableText.contains(normalizedQuery);
         })
         .toList(growable: false);
   }
 
-  Future<void> _openChat(User contact) async {
-    final chat =
-        DummyData.findChatWith(contact.id) ??
-        DummyData.createChatWith(
-          contact: contact,
-          text: '',
-          time: TimeOfDay.now().format(context),
-        );
+  Future<void> _openChat(_ApiUser contact) async {
+    if (_openingUserId != null) return;
 
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatDetailScreen(contact: contact, chatId: chat.id),
-      ),
-    );
-
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _showStatusComposer() async {
-    final controller = TextEditingController();
-    Uint8List? imageBytes;
-    String? imageName;
-
-    final status = await showDialog<ProfileStatus>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          Future<void> pickStatusImage(ImageSource source) async {
-            try {
-              final pickedImage = await _imagePicker.pickImage(
-                source: source,
-                imageQuality: 86,
-                maxWidth: 1600,
-              );
-              if (pickedImage == null) return;
-
-              final bytes = await pickedImage.readAsBytes();
-              if (!context.mounted) return;
-
-              setDialogState(() {
-                imageBytes = bytes;
-                imageName = pickedImage.name;
-              });
-            } catch (_) {
-              if (!mounted) return;
-              final sourceName = source == ImageSource.camera
-                  ? 'la camara'
-                  : 'la galeria';
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'No se pudo abrir $sourceName. Revisa los permisos del dispositivo.',
-                  ),
-                ),
-              );
-            }
-          }
-
-          final hasContent =
-              controller.text.trim().isNotEmpty ||
-              (imageBytes != null && imageBytes!.isNotEmpty);
-
-          return AlertDialog(
-            title: const Text('Nuevo estado'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (imageBytes != null) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(
-                        imageBytes!,
-                        height: 180,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  TextField(
-                    controller: controller,
-                    autofocus: true,
-                    maxLength: 80,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Nota o estado',
-                      hintText: '¿Que estas haciendo?',
-                    ),
-                    onChanged: (_) => setDialogState(() {}),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () => pickStatusImage(ImageSource.camera),
-                        icon: const Icon(Icons.camera_alt),
-                        label: const Text('Camara'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () => pickStatusImage(ImageSource.gallery),
-                        icon: const Icon(Icons.photo),
-                        label: const Text('Galeria'),
-                      ),
-                      if (imageBytes != null)
-                        IconButton.filledTonal(
-                          tooltip: 'Quitar foto',
-                          onPressed: () {
-                            setDialogState(() {
-                              imageBytes = null;
-                              imageName = null;
-                            });
-                          },
-                          icon: const Icon(Icons.close),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Cancelar'),
-              ),
-              FilledButton(
-                onPressed: hasContent
-                    ? () => Navigator.pop(
-                        dialogContext,
-                        ProfileStatus(
-                          note: controller.text.trim(),
-                          imageBytes: imageBytes,
-                          imageName: imageName,
-                        ),
-                      )
-                    : null,
-                child: const Text('Publicar'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    controller.dispose();
-
-    if (!mounted || status == null) return;
     setState(() {
-      DummyData.currentUser.addStatus(status);
+      _openingUserId = contact.id;
     });
-  }
 
-  Future<void> _showStatusViewer(User user) async {
-    final statuses = user.statuses
-        .where((status) => !status.isEmpty)
-        .toList(growable: false)
-        .reversed
-        .toList(growable: false);
-    if (statuses.isEmpty) return;
+    try {
+      final conversation = await _obtenerOCrearConversacion(contact);
+      if (!mounted) return;
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) {
-        return SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: 560,
-                maxHeight: MediaQuery.of(context).size.height * 0.82,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        UserAvatar(
-                          user: user,
-                          radius: 22,
-                          showStatusRing: true,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            user.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        if (user.id == DummyData.currentUser.id)
-                          IconButton.filledTonal(
-                            tooltip: 'Agregar estado',
-                            onPressed: () {
-                              Navigator.pop(context);
-                              _showStatusComposer();
-                            },
-                            icon: const Icon(Icons.add),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: statuses.length,
-                        separatorBuilder: (context, index) =>
-                            const SizedBox(height: 10),
-                        itemBuilder: (context, index) =>
-                            _StatusPreviewCard(status: statuses[index]),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+      setState(() {
+        _openingUserId = null;
+      });
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversacionId: conversation.id,
+            usuarioActualId: _usuarioActualId.toString(),
+            nombreContacto: contact.nombreMostrar,
+            fotoContactoUrl: contact.fotoPerfilUrl,
           ),
-        );
-      },
-    );
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo abrir la conversacion.';
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted && _openingUserId == contact.id) {
+        setState(() {
+          _openingUserId = null;
+        });
+      }
+    }
   }
 
-  Widget _buildContactsList(BuildContext context, List<User> users) {
+  Future<_ConversationPreview> _obtenerOCrearConversacion(
+    _ApiUser contact,
+  ) async {
+    final conversaciones = await _conversacionService
+        .obtenerConversacionesPorUsuario(_usuarioActualId);
+
+    for (final item in conversaciones) {
+      final conversation = _ConversationPreview.fromJson(item);
+      if (conversation.matchesContact(contact)) {
+        return conversation;
+      }
+    }
+
+    final created = await _conversacionService.crearConversacion({
+      'usuario1Id': _usuarioActualId,
+      'usuario2Id': contact.id,
+    });
+
+    return _ConversationPreview.fromJson(created);
+  }
+
+  Widget _buildContactsList(BuildContext context, List<_ApiUser> users) {
     final colorScheme = Theme.of(context).colorScheme;
 
     if (users.isEmpty) {
@@ -394,23 +283,52 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
         color: colorScheme.outlineVariant.withValues(alpha: 0.6),
       ),
       itemBuilder: (context, index) {
-        final User user = users[index];
-        final statusPreview = user.statusPreview;
+        final user = users[index];
+        final isOpening = _openingUserId == user.id;
+
         return ListTile(
           minVerticalPadding: 12,
-          leading: UserAvatar(user: user, radius: 28, showStatusRing: true),
+          leading: _PersonAvatar(user: user, radius: 28),
           title: Text(
-            user.name,
+            user.nombreMostrar,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Text(
-            statusPreview.isEmpty ? 'Perfil disponible' : statusPreview,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          subtitle: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  '@${user.nombreUsuario}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (user.estadoActivo) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.circle, size: 8, color: Colors.green.shade600),
+                const SizedBox(width: 4),
+                Text(
+                  'Activo',
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ],
           ),
-          trailing: Icon(Icons.chat_bubble_outline, color: colorScheme.primary),
+          trailing: isOpening
+              ? const SizedBox.square(
+                  dimension: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  tooltip: 'Enviar mensaje',
+                  icon: Icon(
+                    Icons.chat_bubble_outline,
+                    color: colorScheme.primary,
+                  ),
+                  onPressed: () => _openChat(user),
+                ),
           onTap: () => _openChat(user),
         );
       },
@@ -419,50 +337,241 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
 
   Widget _buildStoriesList(
     BuildContext context,
-    List<User> users,
+    List<_ApiUser> users,
     ColorScheme colorScheme,
   ) {
-    final currentUser = DummyData.currentUser;
+    final currentUser = _currentUser;
 
     return ListView(
       key: const ValueKey('stories'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
       children: [
-        _StoryTile(
-          user: currentUser,
-          title: 'Tu estado',
-          subtitle: currentUser.hasStatuses
-              ? _statusSubtitle(currentUser)
-              : 'Agregar una actualizacion',
-          trailing: IconButton.filledTonal(
-            onPressed: _showStatusComposer,
-            icon: const Icon(Icons.add),
+        if (currentUser != null)
+          _StoryTile(
+            user: currentUser,
+            title: 'Tu estado',
+            subtitle: currentUser.estadoActivo
+                ? 'Perfil activo'
+                : 'Sin actividad reciente',
+            trailing: IconButton.filledTonal(
+              onPressed: _loadUsers,
+              icon: const Icon(Icons.refresh),
+            ),
+            onTap: _loadUsers,
           ),
-          onTap: currentUser.hasStatuses
-              ? () => _showStatusViewer(currentUser)
-              : _showStatusComposer,
-        ),
-        const SizedBox(height: 8),
+        if (currentUser != null) const SizedBox(height: 8),
         for (final user in users.take(6))
           _StoryTile(
             user: user,
-            title: user.name,
-            subtitle: _statusSubtitle(user),
+            title: user.nombreMostrar,
+            subtitle: user.estadoActivo ? 'Activo' : 'Sin actividad reciente',
             trailing: Icon(
               Icons.chevron_right,
               color: colorScheme.onSurfaceVariant,
             ),
-            onTap: user.hasStatuses ? () => _showStatusViewer(user) : null,
+            onTap: () => _openChat(user),
           ),
       ],
     );
   }
 
-  String _statusSubtitle(User user) {
-    if (!user.hasStatuses) return 'Estado reciente';
-    final preview = user.statusPreview;
-    if (user.statusCount == 1) return preview;
-    return '${user.statusCount} estados · $preview';
+  Widget _buildErrorState(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final message = _loadError is ApiException
+        ? (_loadError! as ApiException).message
+        : 'No se pudieron cargar las personas.';
+
+    return Center(
+      key: const ValueKey('people-error'),
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _loadUsers,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApiUser {
+  final int id;
+  final String nombreUsuario;
+  final String nombreMostrar;
+  final String fotoPerfilUrl;
+  final bool estadoActivo;
+
+  const _ApiUser({
+    required this.id,
+    required this.nombreUsuario,
+    required this.nombreMostrar,
+    required this.fotoPerfilUrl,
+    required this.estadoActivo,
+  });
+
+  factory _ApiUser.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('El usuario recibido no es valido.');
+    }
+
+    final map = Map<String, dynamic>.from(json);
+
+    return _ApiUser(
+      id: _intValue(map['id']),
+      nombreUsuario: _text(map['nombreUsuario'], fallback: 'usuario'),
+      nombreMostrar: _text(map['nombreMostrar'], fallback: 'Usuario'),
+      fotoPerfilUrl: _text(map['fotoPerfilUrl']),
+      estadoActivo: _boolValue(map['estadoActivo']),
+    );
+  }
+
+  static int _intValue(Object? value) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  static String _text(Object? value, {String fallback = ''}) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  static bool _boolValue(Object? value) {
+    if (value is bool) return value;
+    return value?.toString().toLowerCase() == 'true';
+  }
+}
+
+class _ConversationPreview {
+  final String id;
+  final String nombreContacto;
+  final String fotoContactoUrl;
+
+  const _ConversationPreview({
+    required this.id,
+    required this.nombreContacto,
+    required this.fotoContactoUrl,
+  });
+
+  factory _ConversationPreview.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('La conversacion recibida no es valida.');
+    }
+
+    final map = Map<String, dynamic>.from(json);
+
+    return _ConversationPreview(
+      id: _requiredText(map['id'], 'id'),
+      nombreContacto: _text(map['nombreContacto']),
+      fotoContactoUrl: _text(map['fotoContactoUrl']),
+    );
+  }
+
+  bool matchesContact(_ApiUser contact) {
+    return _normalize(nombreContacto) == _normalize(contact.nombreMostrar);
+  }
+
+  static String _requiredText(Object? value, String fieldName) {
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      throw FormatException('La conversacion no tiene $fieldName.');
+    }
+    return text;
+  }
+
+  static String _text(Object? value) {
+    return value?.toString().trim() ?? '';
+  }
+
+  static String _normalize(String value) {
+    return value.trim().toLowerCase();
+  }
+}
+
+class _PersonAvatar extends StatelessWidget {
+  const _PersonAvatar({required this.user, required this.radius});
+
+  final _ApiUser user;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final avatar = SizedBox.square(
+      dimension: radius * 2,
+      child: ClipOval(child: _buildImage(context)),
+    );
+
+    if (!user.estadoActivo) return avatar;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        avatar,
+        Positioned(
+          right: 0,
+          bottom: 0,
+          child: Container(
+            width: radius * 0.35,
+            height: radius * 0.35,
+            decoration: BoxDecoration(
+              color: Colors.green,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                width: 2,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildImage(BuildContext context) {
+    final imageUrl = user.fotoPerfilUrl.trim();
+    if (imageUrl.isEmpty) return _fallback(context);
+
+    return Image.network(
+      imageUrl,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => _fallback(context),
+    );
+  }
+
+  Widget _fallback(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final initials = user.nombreMostrar
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part.characters.first.toUpperCase())
+        .join();
+
+    return ColoredBox(
+      color: colorScheme.primaryContainer,
+      child: Center(
+        child: Text(
+          initials.isEmpty ? '?' : initials,
+          style: TextStyle(
+            color: colorScheme.onPrimaryContainer,
+            fontSize: radius * 0.55,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -475,7 +584,7 @@ class _StoryTile extends StatelessWidget {
     this.onTap,
   });
 
-  final User user;
+  final _ApiUser user;
   final String title;
   final String subtitle;
   final Widget trailing;
@@ -495,7 +604,7 @@ class _StoryTile extends StatelessWidget {
       ),
       child: ListTile(
         minVerticalPadding: 12,
-        leading: UserAvatar(user: user, radius: 28, showStatusRing: true),
+        leading: _PersonAvatar(user: user, radius: 28),
         title: Text(
           title,
           maxLines: 1,
@@ -505,55 +614,6 @@ class _StoryTile extends StatelessWidget {
         subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
         trailing: trailing,
         onTap: onTap,
-      ),
-    );
-  }
-}
-
-class _StatusPreviewCard extends StatelessWidget {
-  const _StatusPreviewCard({required this.status});
-
-  final ProfileStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Card(
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (status.hasImage) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  status.imageBytes!,
-                  height: 220,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    height: 160,
-                    alignment: Alignment.center,
-                    color: colorScheme.surfaceContainerHighest,
-                    child: Icon(
-                      Icons.broken_image_outlined,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-              if (status.hasNote) const SizedBox(height: 10),
-            ],
-            if (status.hasNote)
-              Text(
-                status.note,
-                style: const TextStyle(fontSize: 15, height: 1.35),
-              ),
-          ],
-        ),
       ),
     );
   }

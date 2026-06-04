@@ -13,20 +13,20 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   int _currentIndex = 0;
-
-  final List<Widget> _screens = const [
-    ChatListScreen(),
-    PeopleListScreen(),
-    SettingsScreen(),
-  ];
+  int _chatListReloadKey = 0;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _screens[_currentIndex],
+      body: _buildCurrentScreen(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
+        onDestinationSelected: (index) {
+          setState(() {
+            _currentIndex = index;
+            if (index == 0) _chatListReloadKey++;
+          });
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),
@@ -46,5 +46,13 @@ class _MainLayoutState extends State<MainLayout> {
         ],
       ),
     );
+  }
+
+  Widget _buildCurrentScreen() {
+    return switch (_currentIndex) {
+      0 => ChatListScreen(key: ValueKey(_chatListReloadKey)),
+      1 => const PeopleListScreen(),
+      _ => const SettingsScreen(),
+    };
   }
 }

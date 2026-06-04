@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../data/dummy_data.dart';
 import '../../models/message_model.dart';
 import '../../models/user_model.dart';
+import '../../services/api_service.dart';
+import '../../services/mensaje_service.dart';
 import '../../widgets/user_avatar.dart';
 
 class ChatDetailScreen extends StatefulWidget {
@@ -378,6 +382,608 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 },
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  final String conversacionId;
+  final String usuarioActualId;
+  final String nombreContacto;
+  final String? fotoContactoUrl;
+
+  const ChatScreen({
+    super.key,
+    required this.conversacionId,
+    required this.usuarioActualId,
+    required this.nombreContacto,
+    this.fotoContactoUrl,
+  });
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final MensajeService _mensajeService = MensajeService();
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  final List<_BackendMessage> _messages = [];
+  Timer? _refreshTimer;
+  Object? _loadError;
+  bool _isLoading = true;
+  bool _isRefreshing = false;
+  bool _isSending = false;
+
+  bool get _canSend => _controller.text.trim().isNotEmpty && !_isSending;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages(showLoading: true, forceScroll: true);
+    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _loadMessages();
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _scrollController.dispose();
+    _controller.dispose();
+    _mensajeService.close();
+    super.dispose();
+  }
+
+  Future<List<_BackendMessage>> _fetchMessages() async {
+    final response = await _mensajeService.obtenerMensajesPorConversacion(
+      widget.conversacionId,
+    );
+
+    final messagesById = <String, _BackendMessage>{};
+    for (final item in response) {
+      final message = _BackendMessage.fromJson(item);
+      messagesById[message.id] = message;
+    }
+
+    final messages = messagesById.values.toList(growable: false);
+    messages.sort((a, b) {
+      final aDate = a.fechaEnvio;
+      final bDate = b.fechaEnvio;
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return -1;
+      if (bDate == null) return 1;
+      return aDate.compareTo(bDate);
+    });
+
+    return messages;
+  }
+
+  Future<void> _loadMessages({
+    bool showLoading = false,
+    bool forceScroll = false,
+  }) async {
+    if (_isRefreshing) return;
+
+    _isRefreshing = true;
+    if (showLoading && mounted) {
+      setState(() {
+        _isLoading = true;
+        _loadError = null;
+      });
+    }
+
+    try {
+      final messages = await _fetchMessages();
+      if (!mounted) return;
+
+      final shouldScroll =
+          forceScroll || _messages.isEmpty || _hasNewMessages(messages);
+
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(messages);
+        _loadError = null;
+        _isLoading = false;
+      });
+
+      if (shouldScroll) {
+        _scrollToBottom();
+      }
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _loadError = error;
+        _isLoading = false;
+      });
+    } finally {
+      _isRefreshing = false;
+    }
+  }
+
+  bool _hasNewMessages(List<_BackendMessage> messages) {
+    final currentIds = _messages.map((message) => message.id).toSet();
+    return messages.any((message) => !currentIds.contains(message.id));
+  }
+
+  void _reloadMessages() {
+    _loadMessages(forceScroll: true);
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _sendMessage() async {
+    final contenido = _controller.text.trim();
+    if (contenido.isEmpty || _isSending) return;
+
+    setState(() {
+      _isSending = true;
+    });
+
+    try {
+      await _mensajeService.enviarMensaje({
+        'contenido': contenido,
+        'tipoMensaje': 'TEXTO',
+        'remitenteId': widget.usuarioActualId,
+        'conversacionId': widget.conversacionId,
+        'estado': 'ENVIADO',
+      });
+
+      _controller.clear();
+      await _loadMessages(forceScroll: true);
+    } catch (error) {
+      if (!mounted) return;
+
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo enviar el mensaje.';
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        titleSpacing: 0,
+        title: Row(
+          children: [
+            _ContactAvatar(
+              name: widget.nombreContacto,
+              imageUrl: widget.fotoContactoUrl ?? '',
+              radius: 18,
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                widget.nombreContacto,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Actualizar',
+            icon: const Icon(Icons.refresh),
+            onPressed: _reloadMessages,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(child: _buildMessagesArea()),
+          _buildBottomInputArea(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessagesArea() {
+    if (_isLoading && _messages.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_loadError != null && _messages.isEmpty) {
+      return _buildErrorState(_loadError);
+    }
+
+    if (_messages.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860),
+        child: ListView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          itemCount: _messages.length,
+          itemBuilder: (context, index) {
+            return _buildMessageBubble(_messages[index]);
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(_BackendMessage message) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isMine = message.remitenteId == widget.usuarioActualId;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxBubbleWidth = constraints.maxWidth > 720
+            ? 520.0
+            : constraints.maxWidth * 0.78;
+
+        return Align(
+          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isMine
+                    ? colorScheme.primary
+                    : colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isMine ? 18 : 4),
+                  bottomRight: Radius.circular(isMine ? 4 : 18),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!isMine)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Text(
+                        message.remitenteNombre.isEmpty
+                            ? widget.nombreContacto
+                            : message.remitenteNombre,
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  Text(
+                    message.contenido,
+                    style: TextStyle(
+                      color: isMine
+                          ? colorScheme.onPrimary
+                          : colorScheme.onSurface,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        message.fechaEnvioTexto,
+                        style: TextStyle(
+                          color: isMine
+                              ? colorScheme.onPrimary.withValues(alpha: 0.75)
+                              : colorScheme.onSurfaceVariant,
+                          fontSize: 11,
+                        ),
+                      ),
+                      if (isMine && message.estado.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          message.estado,
+                          style: TextStyle(
+                            color: colorScheme.onPrimary.withValues(
+                              alpha: 0.75,
+                            ),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomInputArea() {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return SafeArea(
+      top: false,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          border: Border(
+            top: BorderSide(
+              color: colorScheme.outlineVariant.withValues(alpha: 0.7),
+            ),
+          ),
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 860),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      enabled: !_isSending,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: 'Aa',
+                        isDense: true,
+                        filled: true,
+                        fillColor: colorScheme.surfaceContainerHighest,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(22),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(22),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(22),
+                          borderSide: BorderSide(
+                            color: colorScheme.primary,
+                            width: 1,
+                          ),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 11,
+                        ),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    tooltip: 'Enviar',
+                    icon: _isSending
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                    onPressed: _canSend ? _sendMessage : null,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Text(
+          'No hay mensajes en esta conversacion.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: colorScheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(Object? error) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final message = error is ApiException
+        ? error.message
+        : 'No se pudieron cargar los mensajes.';
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _reloadMessages,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BackendMessage {
+  final String id;
+  final String contenido;
+  final String tipoMensaje;
+  final DateTime? fechaEnvio;
+  final String fechaEnvioTexto;
+  final String remitenteId;
+  final String remitenteNombre;
+  final String conversacionId;
+  final String estado;
+
+  const _BackendMessage({
+    required this.id,
+    required this.contenido,
+    required this.tipoMensaje,
+    required this.fechaEnvio,
+    required this.fechaEnvioTexto,
+    required this.remitenteId,
+    required this.remitenteNombre,
+    required this.conversacionId,
+    required this.estado,
+  });
+
+  factory _BackendMessage.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('El mensaje recibido no es valido.');
+    }
+
+    final map = Map<String, dynamic>.from(json);
+    final rawDate = _text(map['fechaEnvio']);
+    final parsedDate = DateTime.tryParse(rawDate)?.toLocal();
+
+    return _BackendMessage(
+      id: _text(
+        map['id'],
+        fallback: DateTime.now().microsecondsSinceEpoch.toString(),
+      ),
+      contenido: _text(map['contenido']),
+      tipoMensaje: _text(map['tipoMensaje'], fallback: 'TEXTO'),
+      fechaEnvio: parsedDate,
+      fechaEnvioTexto: _formatDate(rawDate, parsedDate),
+      remitenteId: _text(map['remitenteId']),
+      remitenteNombre: _text(map['remitenteNombre']),
+      conversacionId: _text(map['conversacionId']),
+      estado: _text(map['estado']),
+    );
+  }
+
+  static String _text(Object? value, {String fallback = ''}) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  static String _formatDate(String rawDate, DateTime? parsedDate) {
+    if (rawDate.isEmpty) return '';
+    if (parsedDate == null) return rawDate;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final messageDay = DateTime(
+      parsedDate.year,
+      parsedDate.month,
+      parsedDate.day,
+    );
+
+    final hour = parsedDate.hour % 12 == 0 ? 12 : parsedDate.hour % 12;
+    final minute = parsedDate.minute.toString().padLeft(2, '0');
+    final period = parsedDate.hour >= 12 ? 'PM' : 'AM';
+    final time = '$hour:$minute $period';
+
+    if (messageDay == today) return time;
+    if (messageDay == today.subtract(const Duration(days: 1))) {
+      return 'Ayer $time';
+    }
+
+    return '${parsedDate.day}/${parsedDate.month}/${parsedDate.year} $time';
+  }
+}
+
+class _ContactAvatar extends StatelessWidget {
+  const _ContactAvatar({
+    required this.name,
+    required this.imageUrl,
+    required this.radius,
+  });
+
+  final String name;
+  final String imageUrl;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmedUrl = imageUrl.trim();
+
+    return SizedBox.square(
+      dimension: radius * 2,
+      child: ClipOval(
+        child: trimmedUrl.isEmpty
+            ? _fallback(context)
+            : Image.network(
+                trimmedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _fallback(context),
+              ),
+      ),
+    );
+  }
+
+  Widget _fallback(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part.characters.first.toUpperCase())
+        .join();
+
+    return ColoredBox(
+      color: colorScheme.primaryContainer,
+      child: Center(
+        child: Text(
+          initials.isEmpty ? '?' : initials,
+          style: TextStyle(
+            color: colorScheme.onPrimaryContainer,
+            fontSize: radius * 0.55,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
