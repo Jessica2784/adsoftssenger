@@ -1,11 +1,11 @@
 import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import '../../data/dummy_data.dart';
-import '../../models/user_model.dart';
+import '../../providers/session_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/conversacion_service.dart';
-import '../../widgets/user_avatar.dart';
+import '../../widgets/profile_avatar.dart';
 import 'chat_detail.dart';
 
 class ChatListScreen extends StatefulWidget {
@@ -18,6 +18,8 @@ class ChatListScreen extends StatefulWidget {
 }
 
 class _ChatListScreenState extends State<ChatListScreen> {
+  static final Map<String, List<_ConversationPreview>> _conversationCache = {};
+
   final ConversacionService _conversacionService = ConversacionService();
 
   late Future<List<_ConversationPreview>> _conversacionesFuture;
@@ -26,7 +28,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   void initState() {
     super.initState();
-    _loadedUsuarioId = _resolveUsuarioId();
+    _loadedUsuarioId = widget.usuarioId?.toString() ?? '1';
     _conversacionesFuture = _loadConversaciones(_loadedUsuarioId);
   }
 
@@ -38,11 +40,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final usuarioId = _resolveUsuarioId();
+    final session = context.watch<SessionProvider>();
+    final usuarioId =
+        widget.usuarioId?.toString() ?? session.usuarioActualId.toString();
     if (_loadedUsuarioId != usuarioId) {
       _loadedUsuarioId = usuarioId;
       _conversacionesFuture = _loadConversaciones(usuarioId);
     }
+    final currentUser = session.usuarioActual;
 
     return Scaffold(
       appBar: AppBar(
@@ -52,10 +57,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
         ),
         leading: Padding(
           padding: const EdgeInsets.all(8),
-          child: UserAvatar(
-            user: DummyData.currentUser,
+          child: ProfileAvatar(
+            name: currentUser?.nombreMostrar ?? 'Jessica',
+            imageUrl: currentUser?.fotoPerfilUrl ?? '',
             radius: 18,
-            showStatusRing: true,
           ),
         ),
         actions: [
@@ -69,45 +74,24 @@ class _ChatListScreenState extends State<ChatListScreen> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
-          child: Column(
-            children: [
-              SizedBox(
-                height: 150,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  children: [
-                    for (final user in DummyData.activeUsers.take(4))
-                      _buildStory(user: user),
-                    _buildStory(user: DummyData.currentUser, name: 'Tú'),
-                  ],
-                ),
-              ),
-              Expanded(child: _buildConversationList(context)),
-            ],
-          ),
+          child: _buildConversationList(context),
         ),
       ),
     );
-  }
-
-  String _resolveUsuarioId() {
-    return '1';
   }
 
   Future<List<_ConversationPreview>> _loadConversaciones(
     String usuarioId,
   ) async {
     foundation.debugPrint('Chats usuarioActualId usado: $usuarioId');
-
     final response = await _conversacionService.obtenerConversacionesPorUsuario(
       usuarioId,
     );
-
-    return response.map(_ConversationPreview.fromJson).toList(growable: false);
+    final conversations = response
+        .map(_ConversationPreview.fromJson)
+        .toList(growable: false);
+    _conversationCache[usuarioId] = conversations;
+    return conversations;
   }
 
   void _retryLoad() {
@@ -120,28 +104,60 @@ class _ChatListScreenState extends State<ChatListScreen> {
     return FutureBuilder<List<_ConversationPreview>>(
       future: _conversacionesFuture,
       builder: (context, snapshot) {
+        final cached = _conversationCache[_loadedUsuarioId];
         if (snapshot.connectionState == ConnectionState.waiting ||
             snapshot.connectionState == ConnectionState.active) {
+          if (cached != null && cached.isNotEmpty) {
+            return Stack(
+              children: [
+                _buildConversationItems(context, cached),
+                const Align(
+                  alignment: Alignment.topCenter,
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              ],
+            );
+          }
           return const Center(child: CircularProgressIndicator());
         }
-
         if (snapshot.hasError) {
+          if (cached != null && cached.isNotEmpty) {
+            return Column(
+              children: [
+                MaterialBanner(
+                  content: const Text(
+                    'Se muestran los chats guardados. No se pudo actualizar.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: _retryLoad,
+                      child: const Text('Reintentar'),
+                    ),
+                  ],
+                ),
+                Expanded(child: _buildConversationItems(context, cached)),
+              ],
+            );
+          }
           return _buildErrorState(context, snapshot.error);
         }
 
         final conversaciones = snapshot.data ?? const <_ConversationPreview>[];
-        if (conversaciones.isEmpty) {
-          return _buildEmptyState(context);
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
-          itemCount: conversaciones.length,
-          itemBuilder: (context, index) {
-            return _buildConversationTile(context, conversaciones[index]);
-          },
-        );
+        if (conversaciones.isEmpty) return _buildEmptyState(context);
+        return _buildConversationItems(context, conversaciones);
       },
+    );
+  }
+
+  Widget _buildConversationItems(
+    BuildContext context,
+    List<_ConversationPreview> conversations,
+  ) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
+      itemCount: conversations.length,
+      itemBuilder: (context, index) =>
+          _buildConversationTile(context, conversations[index]),
     );
   }
 
@@ -150,7 +166,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
     _ConversationPreview conversation,
   ) {
     final colorScheme = Theme.of(context).colorScheme;
-
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
@@ -161,7 +176,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
       ),
       child: ListTile(
         minVerticalPadding: 12,
-        leading: _ConversationAvatar(
+        leading: ProfileAvatar(
           name: conversation.nombreContacto,
           imageUrl: conversation.fotoContactoUrl,
           radius: 25,
@@ -178,10 +193,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: colorScheme.onSurfaceVariant),
         ),
-        trailing: _buildTrailing(
-          context,
-          time: conversation.fechaUltimoMensaje,
-        ),
+        trailing: _buildTrailing(context, conversation.fechaUltimoMensaje),
         onTap: () async {
           await Navigator.push(
             context,
@@ -194,18 +206,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ),
             ),
           );
-
           if (mounted) _retryLoad();
         },
       ),
     );
   }
 
-  Widget _buildTrailing(BuildContext context, {required String time}) {
+  Widget _buildTrailing(BuildContext context, String time) {
     if (time.isEmpty) return const SizedBox.shrink();
-
-    final colorScheme = Theme.of(context).colorScheme;
-
     return SizedBox(
       width: 78,
       child: Text(
@@ -213,123 +221,45 @@ class _ChatListScreenState extends State<ChatListScreen> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         textAlign: TextAlign.end,
-        style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 12),
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          fontSize: 12,
+        ),
       ),
     );
   }
 
   Widget _buildEmptyState(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Text(
           'No hay conversaciones para mostrar.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: colorScheme.onSurfaceVariant),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
   }
 
   Widget _buildErrorState(BuildContext context, Object? error) {
-    final colorScheme = Theme.of(context).colorScheme;
     final message = error is ApiException
         ? error.message
         : 'No se pudieron cargar las conversaciones.';
-
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colorScheme.onSurfaceVariant),
-            ),
+            Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: _retryLoad,
               icon: const Icon(Icons.refresh),
               label: const Text('Reintentar'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStory({required User user, String? name}) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final status = user.latestStatus;
-    final statusText = status != null && status.hasNote
-        ? status.note.trim()
-        : null;
-
-    return SizedBox(
-      width: 94,
-      child: Padding(
-        padding: const EdgeInsets.only(right: 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 36,
-              child: status == null
-                  ? const SizedBox.shrink()
-                  : Container(
-                      constraints: const BoxConstraints(maxWidth: 82),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: status.hasImage
-                            ? const Color(0xFFE7F1FF)
-                            : colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: status.hasImage
-                              ? const Color(0xFF0A84FF)
-                              : colorScheme.outlineVariant.withValues(
-                                  alpha: 0.7,
-                                ),
-                        ),
-                      ),
-                      child: statusText == null || statusText.isEmpty
-                          ? Icon(
-                              Icons.photo,
-                              size: 18,
-                              color: status.hasImage
-                                  ? const Color(0xFF0A84FF)
-                                  : colorScheme.onSurfaceVariant,
-                            )
-                          : Text(
-                              statusText,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: status.hasImage
-                                    ? const Color(0xFF0758B8)
-                                    : colorScheme.onSurfaceVariant,
-                                fontSize: 10,
-                                height: 1.1,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                    ),
-            ),
-            const SizedBox(height: 4),
-            UserAvatar(user: user, radius: 27, showStatusRing: true),
-            const SizedBox(height: 6),
-            Text(
-              name ?? user.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -357,9 +287,7 @@ class _ConversationPreview {
     if (json is! Map) {
       throw const FormatException('La conversacion recibida no es valida.');
     }
-
     final map = Map<String, dynamic>.from(json);
-
     return _ConversationPreview(
       id: _requiredText(map['id'], 'id'),
       nombreContacto: _optionalText(
@@ -391,7 +319,6 @@ class _ConversationPreview {
   static String _formatDate(Object? value) {
     final rawDate = value?.toString().trim() ?? '';
     if (rawDate.isEmpty) return '';
-
     final parsedDate = DateTime.tryParse(rawDate);
     if (parsedDate == null) return rawDate;
 
@@ -399,74 +326,13 @@ class _ConversationPreview {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final messageDay = DateTime(localDate.year, localDate.month, localDate.day);
-
     if (messageDay == today) {
       final hour = localDate.hour % 12 == 0 ? 12 : localDate.hour % 12;
       final minute = localDate.minute.toString().padLeft(2, '0');
       final period = localDate.hour >= 12 ? 'PM' : 'AM';
       return '$hour:$minute $period';
     }
-
-    if (messageDay == today.subtract(const Duration(days: 1))) {
-      return 'Ayer';
-    }
-
+    if (messageDay == today.subtract(const Duration(days: 1))) return 'Ayer';
     return '${localDate.day}/${localDate.month}/${localDate.year}';
-  }
-}
-
-class _ConversationAvatar extends StatelessWidget {
-  const _ConversationAvatar({
-    required this.name,
-    required this.imageUrl,
-    required this.radius,
-  });
-
-  final String name;
-  final String imageUrl;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    final trimmedUrl = imageUrl.trim();
-
-    return SizedBox.square(
-      dimension: radius * 2,
-      child: ClipOval(
-        child: trimmedUrl.isEmpty
-            ? _fallback(context)
-            : Image.network(
-                trimmedUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) =>
-                    _fallback(context),
-              ),
-      ),
-    );
-  }
-
-  Widget _fallback(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final initials = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part.characters.first.toUpperCase())
-        .join();
-
-    return ColoredBox(
-      color: colorScheme.primaryContainer,
-      child: Center(
-        child: Text(
-          initials.isEmpty ? '?' : initials,
-          style: TextStyle(
-            color: colorScheme.onPrimaryContainer,
-            fontSize: radius * 0.55,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
   }
 }

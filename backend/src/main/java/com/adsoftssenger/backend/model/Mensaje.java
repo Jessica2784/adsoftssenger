@@ -1,6 +1,7 @@
 package com.adsoftssenger.backend.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.persistence.Basic;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -42,6 +43,13 @@ public class Mensaje {
 
     @Column(name = "url_adjunto", length = 500)
     private String urlAdjunto;
+
+    @Basic(fetch = FetchType.LAZY)
+    @Column(name = "adjunto", columnDefinition = "BYTEA")
+    private byte[] adjunto;
+
+    @Column(name = "adjunto_tipo", length = 100)
+    private String adjuntoTipo;
 
     @Column(name = "duracion_audio_seg")
     private Integer duracionAudioSeg;

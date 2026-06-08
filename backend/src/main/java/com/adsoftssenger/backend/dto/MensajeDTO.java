@@ -23,5 +23,6 @@ public class MensajeDTO {
     private Long remitenteId;
     private String remitenteNombre;
     private Long conversacionId;
+    private String urlAdjunto;
     private Estado estado;
 }

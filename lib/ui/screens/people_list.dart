@@ -1,9 +1,21 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+
+import '../../models/api_user.dart';
+import '../../models/story_model.dart';
+import '../../providers/session_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/conversacion_service.dart';
+import '../../services/media_service.dart';
 import '../../services/usuario_service.dart';
+import '../../widgets/image_source_sheet.dart';
+import '../../widgets/profile_avatar.dart';
 import 'chat_detail.dart';
+import 'register_user_screen.dart';
+import 'story_viewer_screen.dart';
 
 class PeopleListScreen extends StatefulWidget {
   const PeopleListScreen({super.key});
@@ -13,18 +25,24 @@ class PeopleListScreen extends StatefulWidget {
 }
 
 class _PeopleListScreenState extends State<PeopleListScreen> {
-  static const int _usuarioActualId = 1;
-
   final TextEditingController _searchController = TextEditingController();
   final UsuarioService _usuarioService = UsuarioService();
   final ConversacionService _conversacionService = ConversacionService();
+  final MediaService _mediaService = MediaService();
+  final ImagePicker _imagePicker = ImagePicker();
 
-  List<_ApiUser> _users = [];
-  Object? _loadError;
+  List<ApiUser> _users = [];
+  List<StoryModel> _stories = [];
+  Object? _usersError;
+  Object? _storiesError;
   int _selectedView = 0;
   int? _openingUserId;
   bool _isSearching = false;
-  bool _isLoading = true;
+  bool _usersLoading = true;
+  bool _storiesLoading = false;
+  bool _storyUploading = false;
+
+  int get _usuarioActualId => context.read<SessionProvider>().usuarioActualId;
 
   @override
   void initState() {
@@ -37,12 +55,90 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     _searchController.dispose();
     _usuarioService.close();
     _conversacionService.close();
+    _mediaService.close();
     super.dispose();
+  }
+
+  Future<void> _loadUsers() async {
+    if (mounted) {
+      setState(() {
+        _usersLoading = true;
+        _usersError = null;
+      });
+    }
+
+    try {
+      final usuarioId = _usuarioActualId;
+      final response = await _usuarioService.obtenerUsuarios();
+      final users = response.map(ApiUser.fromJson).toList()
+        ..sort((a, b) => a.nombreMostrar.compareTo(b.nombreMostrar));
+      if (!mounted) return;
+
+      for (final user in users) {
+        if (user.id == usuarioId) {
+          context.read<SessionProvider>().sincronizarUsuario(user);
+          break;
+        }
+      }
+
+      setState(() {
+        _users = users;
+        _usersLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _usersError = error;
+        _usersLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadStories() async {
+    if (mounted) {
+      setState(() {
+        _storiesLoading = true;
+        _storiesError = null;
+      });
+    }
+
+    try {
+      final currentUserId = _usuarioActualId;
+      final response = await _mediaService.getStories();
+      final stories = response
+          .map(StoryModel.fromJson)
+          .map(
+            (story) => story.copyWith(
+              propia: story.propia || story.usuarioId == currentUserId,
+            ),
+          )
+          .where((story) => story.imagenUrl.isNotEmpty)
+          .toList(growable: false);
+
+      if (!mounted) return;
+      setState(() {
+        _stories = stories;
+        _storiesLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _storiesError = error;
+        _storiesLoading = false;
+      });
+    }
+  }
+
+  void _refreshCurrentView() {
+    if (_selectedView == 0) {
+      _loadUsers();
+    } else {
+      _loadStories();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final contacts = _filterUsers(_contactUsers, _searchController.text);
 
     return Scaffold(
@@ -63,10 +159,16 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
               ),
         actions: [
           IconButton(
-            tooltip: _isSearching ? 'Cerrar busqueda' : 'Buscar contacto',
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
-            onPressed: _toggleSearch,
+            tooltip: 'Actualizar',
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshCurrentView,
           ),
+          if (_selectedView == 0)
+            IconButton(
+              tooltip: _isSearching ? 'Cerrar busqueda' : 'Buscar contacto',
+              icon: Icon(_isSearching ? Icons.close : Icons.search),
+              onPressed: _toggleSearch,
+            ),
         ],
       ),
       body: Center(
@@ -91,85 +193,100 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
                   ],
                   selected: {_selectedView},
                   onSelectionChanged: (selection) {
-                    setState(() => _selectedView = selection.first);
+                    final selectedView = selection.first;
+                    setState(() {
+                      _selectedView = selectedView;
+                      if (_selectedView == 1) {
+                        _isSearching = false;
+                        _searchController.clear();
+                      }
+                    });
+                    if (selectedView == 1) _loadStories();
                   },
                   showSelectedIcon: false,
                 ),
               ),
-              Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: _buildCurrentView(context, contacts, colorScheme),
-                ),
-              ),
+              Expanded(child: _buildCurrentView(contacts)),
             ],
           ),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _loadUsers,
-        icon: const Icon(Icons.refresh),
-        label: const Text('Actualizar'),
+        onPressed: _selectedView == 0
+            ? _openRegisterUser
+            : _storyUploading
+            ? null
+            : _uploadStory,
+        icon: _storyUploading
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(_selectedView == 0 ? Icons.person_add : Icons.add_a_photo),
+        label: Text(_selectedView == 0 ? 'Agregar usuario' : 'Subir historia'),
       ),
     );
   }
 
-  List<_ApiUser> get _contactUsers {
-    return _users
-        .where((user) => user.id != _usuarioActualId)
-        .toList(growable: false);
-  }
+  List<ApiUser> get _contactUsers => _users
+      .where((user) => user.id != _usuarioActualId)
+      .toList(growable: false);
 
-  _ApiUser? get _currentUser {
-    for (final user in _users) {
-      if (user.id == _usuarioActualId) return user;
+  Widget _buildCurrentView(List<ApiUser> contacts) {
+    if (_selectedView == 1) return _buildStoriesView();
+
+    if (_usersLoading && _users.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
     }
-    return null;
-  }
-
-  Widget _buildCurrentView(
-    BuildContext context,
-    List<_ApiUser> contacts,
-    ColorScheme colorScheme,
-  ) {
-    if (_isLoading) {
-      return const Center(
-        key: ValueKey('people-loading'),
-        child: CircularProgressIndicator(),
+    if (_usersError != null && _users.isEmpty) {
+      return _buildErrorState(
+        _usersError,
+        'No se pudieron cargar las personas.',
+        _loadUsers,
       );
     }
-
-    if (_loadError != null) {
-      return _buildErrorState(context);
-    }
-
-    return _selectedView == 0
-        ? _buildContactsList(context, contacts)
-        : _buildStoriesList(context, contacts, colorScheme);
+    return _buildContactsList(contacts);
   }
 
-  Future<void> _loadUsers() async {
-    setState(() {
-      _isLoading = true;
-      _loadError = null;
-    });
+  Future<void> _openRegisterUser() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const RegisterUserScreen()),
+    );
+    if (created != true || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Usuario creado correctamente.')),
+    );
+    await _loadUsers();
+  }
 
+  Future<void> _uploadStory() async {
+    if (_storyUploading) return;
+    final image = await pickImageFromCameraOrGallery(
+      context,
+      picker: _imagePicker,
+      maxWidth: 1800,
+    );
+    if (image == null || !mounted) return;
+
+    setState(() => _storyUploading = true);
     try {
-      final response = await _usuarioService.obtenerUsuarios();
-      final users = response.map(_ApiUser.fromJson).toList(growable: false)
-        ..sort((a, b) => a.nombreMostrar.compareTo(b.nombreMostrar));
-
+      await _mediaService.uploadStoryImage(_usuarioActualId, File(image.path));
       if (!mounted) return;
-      setState(() {
-        _users = users;
-        _isLoading = false;
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Historia subida correctamente.')),
+      );
+      await _loadStories();
     } catch (error) {
       if (!mounted) return;
-      setState(() {
-        _loadError = error;
-        _isLoading = false;
-      });
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo subir la historia. Intenta de nuevo.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _storyUploading = false);
     }
   }
 
@@ -180,36 +297,25 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     });
   }
 
-  List<_ApiUser> _filterUsers(List<_ApiUser> users, String query) {
+  List<ApiUser> _filterUsers(List<ApiUser> users, String query) {
     final normalizedQuery = query.trim().toLowerCase();
     if (normalizedQuery.isEmpty) return users;
-
     return users
         .where((user) {
-          final searchableText = [
-            user.nombreMostrar,
-            user.nombreUsuario,
-          ].join(' ').toLowerCase();
-          return searchableText.contains(normalizedQuery);
+          return '${user.nombreMostrar} ${user.nombreUsuario}'
+              .toLowerCase()
+              .contains(normalizedQuery);
         })
         .toList(growable: false);
   }
 
-  Future<void> _openChat(_ApiUser contact) async {
+  Future<void> _openChat(ApiUser contact) async {
     if (_openingUserId != null) return;
-
-    setState(() {
-      _openingUserId = contact.id;
-    });
+    setState(() => _openingUserId = contact.id);
 
     try {
       final conversation = await _obtenerOCrearConversacion(contact);
       if (!mounted) return;
-
-      setState(() {
-        _openingUserId = null;
-      });
-
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -223,99 +329,60 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-
       final message = error is ApiException
           ? error.message
           : 'No se pudo abrir la conversacion.';
-
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      if (mounted && _openingUserId == contact.id) {
-        setState(() {
-          _openingUserId = null;
-        });
-      }
+      if (mounted) setState(() => _openingUserId = null);
     }
   }
 
   Future<_ConversationPreview> _obtenerOCrearConversacion(
-    _ApiUser contact,
+    ApiUser contact,
   ) async {
     final conversaciones = await _conversacionService
         .obtenerConversacionesPorUsuario(_usuarioActualId);
-
     for (final item in conversaciones) {
       final conversation = _ConversationPreview.fromJson(item);
-      if (conversation.matchesContact(contact)) {
-        return conversation;
-      }
+      if (conversation.matchesContact(contact)) return conversation;
     }
-
     final created = await _conversacionService.crearConversacion({
       'usuario1Id': _usuarioActualId,
       'usuario2Id': contact.id,
     });
-
     return _ConversationPreview.fromJson(created);
   }
 
-  Widget _buildContactsList(BuildContext context, List<_ApiUser> users) {
-    final colorScheme = Theme.of(context).colorScheme;
-
+  Widget _buildContactsList(List<ApiUser> users) {
     if (users.isEmpty) {
-      return Center(
-        key: const ValueKey('contacts-empty'),
-        child: Text(
-          'No se encontraron contactos.',
-          style: TextStyle(color: colorScheme.onSurfaceVariant),
-        ),
-      );
+      return const Center(child: Text('No se encontraron contactos.'));
     }
 
     return ListView.separated(
-      key: const ValueKey('contacts'),
       padding: const EdgeInsets.only(bottom: 88),
       itemCount: users.length,
-      separatorBuilder: (context, index) => Divider(
-        height: 1,
-        color: colorScheme.outlineVariant.withValues(alpha: 0.6),
-      ),
+      separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final user = users[index];
         final isOpening = _openingUserId == user.id;
-
         return ListTile(
           minVerticalPadding: 12,
-          leading: _PersonAvatar(user: user, radius: 28),
+          leading: ProfileAvatar(
+            name: user.nombreMostrar,
+            imageUrl: user.fotoPerfilUrl,
+            radius: 28,
+            showOnlineIndicator: user.estadoActivo,
+          ),
           title: Text(
             user.nombreMostrar,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  '@${user.nombreUsuario}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (user.estadoActivo) ...[
-                const SizedBox(width: 8),
-                Icon(Icons.circle, size: 8, color: Colors.green.shade600),
-                const SizedBox(width: 4),
-                Text(
-                  'Activo',
-                  style: TextStyle(color: colorScheme.onSurfaceVariant),
-                ),
-              ],
-            ],
-          ),
+          subtitle: Text('@${user.nombreUsuario}'),
           trailing: isOpening
               ? const SizedBox.square(
                   dimension: 22,
@@ -325,7 +392,7 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
                   tooltip: 'Enviar mensaje',
                   icon: Icon(
                     Icons.chat_bubble_outline,
-                    color: colorScheme.primary,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                   onPressed: () => _openChat(user),
                 ),
@@ -335,67 +402,132 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     );
   }
 
-  Widget _buildStoriesList(
-    BuildContext context,
-    List<_ApiUser> users,
-    ColorScheme colorScheme,
-  ) {
-    final currentUser = _currentUser;
+  Widget _buildStoriesView() {
+    if (_storiesLoading && _stories.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_storiesError != null && _stories.isEmpty) {
+      return _buildErrorState(
+        _storiesError,
+        'No se pudieron cargar las historias.',
+        _loadStories,
+      );
+    }
+    if (_stories.isEmpty) return _buildEmptyStoriesState();
 
-    return ListView(
-      key: const ValueKey('stories'),
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 88),
-      children: [
-        if (currentUser != null)
-          _StoryTile(
-            user: currentUser,
-            title: 'Tu estado',
-            subtitle: currentUser.estadoActivo
-                ? 'Perfil activo'
-                : 'Sin actividad reciente',
-            trailing: IconButton.filledTonal(
-              onPressed: _loadUsers,
-              icon: const Icon(Icons.refresh),
-            ),
-            onTap: _loadUsers,
-          ),
-        if (currentUser != null) const SizedBox(height: 8),
-        for (final user in users.take(6))
-          _StoryTile(
-            user: user,
-            title: user.nombreMostrar,
-            subtitle: user.estadoActivo ? 'Activo' : 'Sin actividad reciente',
-            trailing: Icon(
-              Icons.chevron_right,
-              color: colorScheme.onSurfaceVariant,
-            ),
-            onTap: () => _openChat(user),
-          ),
-      ],
+    return RefreshIndicator(
+      onRefresh: _loadStories,
+      child: ListView.separated(
+        padding: const EdgeInsets.only(bottom: 88),
+        itemCount: _stories.length + (_storiesError == null ? 0 : 1),
+        separatorBuilder: (_, _) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          if (_storiesError != null && index == 0) {
+            return MaterialBanner(
+              content: const Text(
+                'Se muestran las historias cargadas. No se pudo actualizar.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _loadStories,
+                  child: const Text('Reintentar'),
+                ),
+              ],
+            );
+          }
+          final storyIndex = _storiesError == null ? index : index - 1;
+          return _buildStoryTile(_stories[storyIndex]);
+        },
+      ),
     );
   }
 
-  Widget _buildErrorState(BuildContext context) {
+  Widget _buildStoryTile(StoryModel story) {
     final colorScheme = Theme.of(context).colorScheme;
-    final message = _loadError is ApiException
-        ? (_loadError! as ApiException).message
-        : 'No se pudieron cargar las personas.';
+    return ListTile(
+      minVerticalPadding: 12,
+      leading: ProfileAvatar(
+        name: story.nombreMostrar,
+        imageUrl: story.fotoPerfilUrl,
+        radius: 28,
+        showUnseenRing: !story.vista && !story.propia,
+      ),
+      title: Text(
+        story.propia ? 'Tu historia' : story.nombreMostrar,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+      subtitle: Text(_relativeTime(story.fechaPublicacion)),
+      trailing: _StoryThumbnail(imageUrl: story.imagenUrl),
+      onTap: () => _openStory(story),
+      iconColor: colorScheme.primary,
+    );
+  }
 
+  Future<void> _openStory(StoryModel story) async {
+    final deleted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            StoryViewerScreen(story: story, usuarioActualId: _usuarioActualId),
+      ),
+    );
+    if (!mounted) return;
+    if (deleted == true) {
+      await _loadStories();
+      return;
+    }
+    setState(() {
+      _stories = _stories
+          .map(
+            (item) => item.id == story.id ? item.copyWith(vista: true) : item,
+          )
+          .toList(growable: false);
+    });
+  }
+
+  Widget _buildEmptyStoriesState() {
+    final colorScheme = Theme.of(context).colorScheme;
     return Center(
-      key: const ValueKey('people-error'),
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Icon(
+              Icons.auto_stories_outlined,
+              size: 48,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
             Text(
-              message,
+              'No hay historias por ahora. Sube una foto para compartir tu estado.',
               textAlign: TextAlign.center,
               style: TextStyle(color: colorScheme.onSurfaceVariant),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState(
+    Object? error,
+    String fallback,
+    VoidCallback onRetry,
+  ) {
+    final message = error is ApiException ? error.message : fallback;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: _loadUsers,
+              onPressed: onRetry,
               icon: const Icon(Icons.refresh),
               label: const Text('Reintentar'),
             ),
@@ -404,83 +536,74 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
       ),
     );
   }
+
+  String _relativeTime(DateTime? date) {
+    if (date == null) return 'Hace un momento';
+    final difference = DateTime.now().difference(date);
+    if (difference.inMinutes < 1) return 'Ahora';
+    if (difference.inHours < 1) return 'Hace ${difference.inMinutes} min';
+    if (difference.inHours < 24) return 'Hace ${difference.inHours} h';
+    return '${date.day}/${date.month}/${date.year}';
+  }
 }
 
-class _ApiUser {
-  final int id;
-  final String nombreUsuario;
-  final String nombreMostrar;
-  final String fotoPerfilUrl;
-  final bool estadoActivo;
+class _StoryThumbnail extends StatelessWidget {
+  const _StoryThumbnail({required this.imageUrl});
 
-  const _ApiUser({
-    required this.id,
-    required this.nombreUsuario,
-    required this.nombreMostrar,
-    required this.fotoPerfilUrl,
-    required this.estadoActivo,
-  });
+  final String imageUrl;
 
-  factory _ApiUser.fromJson(Object? json) {
-    if (json is! Map) {
-      throw const FormatException('El usuario recibido no es valido.');
-    }
-
-    final map = Map<String, dynamic>.from(json);
-
-    return _ApiUser(
-      id: _intValue(map['id']),
-      nombreUsuario: _text(map['nombreUsuario'], fallback: 'usuario'),
-      nombreMostrar: _text(map['nombreMostrar'], fallback: 'Usuario'),
-      fotoPerfilUrl: _text(map['fotoPerfilUrl']),
-      estadoActivo: _boolValue(map['estadoActivo']),
+  @override
+  Widget build(BuildContext context) {
+    final resolvedUrl = ApiService.resolveMediaUrl(imageUrl);
+    final colorScheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox.square(
+        dimension: 52,
+        child: resolvedUrl.isEmpty
+            ? ColoredBox(
+                color: colorScheme.surfaceContainerHighest,
+                child: Icon(
+                  Icons.image_not_supported_outlined,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              )
+            : Image.network(
+                resolvedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => ColoredBox(
+                  color: colorScheme.surfaceContainerHighest,
+                  child: Icon(
+                    Icons.broken_image_outlined,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+      ),
     );
-  }
-
-  static int _intValue(Object? value) {
-    if (value is int) return value;
-    return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  static String _text(Object? value, {String fallback = ''}) {
-    final text = value?.toString().trim() ?? '';
-    return text.isEmpty ? fallback : text;
-  }
-
-  static bool _boolValue(Object? value) {
-    if (value is bool) return value;
-    return value?.toString().toLowerCase() == 'true';
   }
 }
 
 class _ConversationPreview {
   final String id;
   final String nombreContacto;
-  final String fotoContactoUrl;
 
-  const _ConversationPreview({
-    required this.id,
-    required this.nombreContacto,
-    required this.fotoContactoUrl,
-  });
+  const _ConversationPreview({required this.id, required this.nombreContacto});
 
   factory _ConversationPreview.fromJson(Object? json) {
     if (json is! Map) {
       throw const FormatException('La conversacion recibida no es valida.');
     }
-
     final map = Map<String, dynamic>.from(json);
-
     return _ConversationPreview(
       id: _requiredText(map['id'], 'id'),
-      nombreContacto: _text(map['nombreContacto']),
-      fotoContactoUrl: _text(map['fotoContactoUrl']),
+      nombreContacto: map['nombreContacto']?.toString().trim() ?? '',
     );
   }
 
-  bool matchesContact(_ApiUser contact) {
-    return _normalize(nombreContacto) == _normalize(contact.nombreMostrar);
-  }
+  bool matchesContact(ApiUser contact) =>
+      nombreContacto.trim().toLowerCase() ==
+      contact.nombreMostrar.trim().toLowerCase();
 
   static String _requiredText(Object? value, String fieldName) {
     final text = value?.toString().trim() ?? '';
@@ -488,133 +611,5 @@ class _ConversationPreview {
       throw FormatException('La conversacion no tiene $fieldName.');
     }
     return text;
-  }
-
-  static String _text(Object? value) {
-    return value?.toString().trim() ?? '';
-  }
-
-  static String _normalize(String value) {
-    return value.trim().toLowerCase();
-  }
-}
-
-class _PersonAvatar extends StatelessWidget {
-  const _PersonAvatar({required this.user, required this.radius});
-
-  final _ApiUser user;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    final avatar = SizedBox.square(
-      dimension: radius * 2,
-      child: ClipOval(child: _buildImage(context)),
-    );
-
-    if (!user.estadoActivo) return avatar;
-
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        avatar,
-        Positioned(
-          right: 0,
-          bottom: 0,
-          child: Container(
-            width: radius * 0.35,
-            height: radius * 0.35,
-            decoration: BoxDecoration(
-              color: Colors.green,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                width: 2,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildImage(BuildContext context) {
-    final imageUrl = user.fotoPerfilUrl.trim();
-    if (imageUrl.isEmpty) return _fallback(context);
-
-    return Image.network(
-      imageUrl,
-      fit: BoxFit.cover,
-      errorBuilder: (context, error, stackTrace) => _fallback(context),
-    );
-  }
-
-  Widget _fallback(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final initials = user.nombreMostrar
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part.characters.first.toUpperCase())
-        .join();
-
-    return ColoredBox(
-      color: colorScheme.primaryContainer,
-      child: Center(
-        child: Text(
-          initials.isEmpty ? '?' : initials,
-          style: TextStyle(
-            color: colorScheme.onPrimaryContainer,
-            fontSize: radius * 0.55,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StoryTile extends StatelessWidget {
-  const _StoryTile({
-    required this.user,
-    required this.title,
-    required this.subtitle,
-    required this.trailing,
-    this.onTap,
-  });
-
-  final _ApiUser user;
-  final String title;
-  final String subtitle;
-  final Widget trailing;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(
-          color: Theme.of(
-            context,
-          ).colorScheme.outlineVariant.withValues(alpha: 0.6),
-        ),
-      ),
-      child: ListTile(
-        minVerticalPadding: 12,
-        leading: _PersonAvatar(user: user, radius: 28),
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-        trailing: trailing,
-        onTap: onTap,
-      ),
-    );
   }
 }

@@ -11,13 +11,9 @@ import lombok.Setter;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UsuarioDTO {
+public class MediaProfilePhotoResponse {
 
-    private Long id;
-    private String nombreUsuario;
-    private String nombreMostrar;
-    private String correo;
+    private Long usuarioId;
     private String fotoPerfilUrl;
-    private boolean estadoActivo;
-    private boolean predeterminado;
+    private String message;
 }

@@ -3,10 +3,11 @@ package com.adsoftssenger.backend.service;
 import com.adsoftssenger.backend.dto.ConversacionDTO;
 import com.adsoftssenger.backend.dto.CrearConversacionRequest;
 import com.adsoftssenger.backend.model.Conversacion;
-import com.adsoftssenger.backend.model.Mensaje;
 import com.adsoftssenger.backend.model.Usuario;
 import com.adsoftssenger.backend.repository.ConversacionRepository;
+import com.adsoftssenger.backend.repository.MensajeRepository;
 import com.adsoftssenger.backend.repository.UsuarioRepository;
+import com.adsoftssenger.backend.repository.projection.UltimoMensajeResumen;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,6 +23,8 @@ public class ConversacionService {
 
     private final ConversacionRepository conversacionRepository;
     private final UsuarioRepository usuarioRepository;
+    private final MensajeRepository mensajeRepository;
+    private final UsuarioService usuarioService;
 
     public ConversacionDTO crearConversacion(CrearConversacionRequest request) {
         validarCrearConversacion(request);
@@ -60,13 +63,13 @@ public class ConversacionService {
 
     public ConversacionDTO toDTO(Conversacion conversacion, Long usuarioActualId) {
         Usuario contacto = obtenerContacto(conversacion, usuarioActualId);
-        Mensaje ultimoMensaje = obtenerUltimoMensaje(conversacion);
+        UltimoMensajeResumen ultimoMensaje = obtenerUltimoMensaje(conversacion);
 
         return ConversacionDTO.builder()
                 .id(conversacion.getId())
                 .nombreContacto(resolveNombreContacto(conversacion, contacto))
-                .fotoContactoUrl(contacto != null ? contacto.getFotoPerfilUrl() : null)
-                .ultimoMensaje(ultimoMensaje != null ? ultimoMensaje.getContenido() : null)
+                .fotoContactoUrl(contacto != null ? usuarioService.resolveFotoPerfilUrl(contacto) : null)
+                .ultimoMensaje(ultimoMensaje != null ? resolveUltimoMensaje(ultimoMensaje) : null)
                 .fechaUltimoMensaje(ultimoMensaje != null ? ultimoMensaje.getFechaEnvio() : null)
                 .build();
     }
@@ -114,11 +117,16 @@ public class ConversacionService {
                 .orElse(null);
     }
 
-    private Mensaje obtenerUltimoMensaje(Conversacion conversacion) {
-        return conversacion.getMensajes()
-                .stream()
-                .max(Comparator.comparing(Mensaje::getFechaEnvio, Comparator.nullsLast(Comparator.naturalOrder())))
+    private UltimoMensajeResumen obtenerUltimoMensaje(Conversacion conversacion) {
+        return mensajeRepository.findFirstByConversacionIdOrderByFechaEnvioDesc(conversacion.getId())
                 .orElse(null);
+    }
+
+    private String resolveUltimoMensaje(UltimoMensajeResumen mensaje) {
+        if (mensaje.getTipoMensaje() == com.adsoftssenger.backend.model.TipoMensaje.IMAGEN_URL) {
+            return "Foto";
+        }
+        return mensaje.getContenido();
     }
 
     private String resolveNombreContacto(Conversacion conversacion, Usuario contacto) {

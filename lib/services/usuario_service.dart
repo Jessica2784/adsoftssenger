@@ -14,11 +14,22 @@ class UsuarioService {
     return _apiService.postMap('/usuarios/login', credenciales);
   }
 
+  Future<Map<String, dynamic>> validarCambioPerfil(
+    Object usuarioId,
+    String password,
+  ) {
+    return _apiService.postMap('/usuarios/$usuarioId/validar-acceso', {
+      'password': password,
+    });
+  }
+
   Future<List<dynamic>> obtenerUsuarios() {
     return _apiService.getList('/usuarios');
   }
 
-  void close() {
-    _apiService.close();
+  Future<Map<String, dynamic>> obtenerUsuario(Object usuarioId) {
+    return _apiService.getMap('/usuarios/$usuarioId');
   }
+
+  void close() => _apiService.close();
 }

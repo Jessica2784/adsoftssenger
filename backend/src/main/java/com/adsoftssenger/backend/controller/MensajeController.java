@@ -6,13 +6,17 @@ import jakarta.persistence.EntityNotFoundException;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/mensajes")
@@ -32,6 +36,32 @@ public class MensajeController {
         } catch (Exception exception) {
             return serverError("No se pudo enviar el mensaje");
         }
+    }
+
+    @PostMapping(path = "/imagen", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> enviarImagen(
+            @RequestParam Long conversacionId,
+            @RequestParam Long remitenteId,
+            @RequestPart("imagen") MultipartFile imagen
+    ) {
+        try {
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(mensajeService.enviarImagen(conversacionId, remitenteId, imagen));
+        } catch (EntityNotFoundException exception) {
+            return notFound(exception.getMessage());
+        } catch (IllegalArgumentException exception) {
+            return badRequest(exception.getMessage());
+        } catch (Exception exception) {
+            return serverError("No se pudo enviar la imagen");
+        }
+    }
+
+    @GetMapping("/{mensajeId}/imagen")
+    public ResponseEntity<byte[]> obtenerImagen(@PathVariable Long mensajeId) {
+        MensajeService.ImagenData imagen = mensajeService.obtenerImagen(mensajeId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(imagen.tipoContenido()))
+                .body(imagen.contenido());
     }
 
     @GetMapping("/conversacion/{conversacionId}")

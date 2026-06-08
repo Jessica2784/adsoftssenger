@@ -1,19 +1,26 @@
 package com.adsoftssenger.backend.controller;
 
+import com.adsoftssenger.backend.dto.CambiarPerfilRequest;
 import com.adsoftssenger.backend.dto.LoginRequest;
 import com.adsoftssenger.backend.dto.RegistroRequest;
+import com.adsoftssenger.backend.dto.UsuarioDTO;
 import com.adsoftssenger.backend.service.UsuarioService;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/usuarios")
@@ -42,6 +49,38 @@ public class UsuarioController {
         } catch (Exception exception) {
             return serverError("No se pudo iniciar sesion");
         }
+    }
+
+    @PostMapping("/{id}/validar-acceso")
+    public ResponseEntity<?> validarCambioPerfil(@PathVariable Long id, @RequestBody(required = false) CambiarPerfilRequest request) {
+        try {
+            return ResponseEntity.ok(usuarioService.validarCambioPerfil(id, request));
+        } catch (EntityNotFoundException exception) {
+            return notFound(exception.getMessage());
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(exception.getMessage()));
+        }
+    }
+
+    @PutMapping(path = "/{id}/foto", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<UsuarioDTO> actualizarFotoPerfil(
+            @PathVariable Long id,
+            @RequestPart("imagen") MultipartFile imagen
+    ) {
+        return ResponseEntity.ok(usuarioService.actualizarFotoPerfil(id, imagen));
+    }
+
+    @GetMapping("/{id}/foto")
+    public ResponseEntity<byte[]> obtenerFotoPerfil(@PathVariable Long id) {
+        UsuarioService.FotoPerfilData foto = usuarioService.obtenerFotoPerfil(id);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(foto.tipoContenido()))
+                .body(foto.contenido());
+    }
+
+    @DeleteMapping("/{id}/foto")
+    public ResponseEntity<UsuarioDTO> eliminarFotoPerfil(@PathVariable Long id) {
+        return ResponseEntity.ok(usuarioService.eliminarFotoPerfil(id));
     }
 
     @GetMapping

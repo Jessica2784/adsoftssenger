@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'providers/session_provider.dart';
 import 'ui/screens/main_layout.dart';
 
 class ThemeProvider extends ChangeNotifier {
@@ -15,8 +16,11 @@ class ThemeProvider extends ChangeNotifier {
 
 void main() {
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => ThemeProvider(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => SessionProvider()),
+      ],
       child: const MessengerCloneApp(),
     ),
   );
@@ -27,7 +31,7 @@ class MessengerCloneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = Provider.of<ThemeProvider>(context);
+    final themeProvider = context.watch<ThemeProvider>();
     return MaterialApp(
       title: 'Adsoftssenger',
       debugShowCheckedModeBanner: false,

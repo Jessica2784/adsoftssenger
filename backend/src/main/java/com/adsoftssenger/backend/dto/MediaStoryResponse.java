@@ -1,5 +1,6 @@
 package com.adsoftssenger.backend.dto;
 
+import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -11,13 +12,12 @@ import lombok.Setter;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UsuarioDTO {
+public class MediaStoryResponse {
 
     private Long id;
-    private String nombreUsuario;
-    private String nombreMostrar;
-    private String correo;
-    private String fotoPerfilUrl;
-    private boolean estadoActivo;
-    private boolean predeterminado;
+    private Long usuarioId;
+    private String usuarioNombre;
+    private String imagenUrl;
+    private LocalDateTime fechaCreacion;
+    private String message;
 }

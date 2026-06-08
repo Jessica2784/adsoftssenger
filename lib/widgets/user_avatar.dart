@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/user_model.dart';
+import '../services/api_service.dart';
 
 class UserAvatar extends StatelessWidget {
   const UserAvatar({
@@ -77,8 +78,11 @@ class UserAvatar extends StatelessWidget {
       );
     }
 
+    final resolvedUrl = ApiService.resolveMediaUrl(user.profileUrl);
+    if (resolvedUrl.isEmpty) return _fallback(context);
+
     return Image.network(
-      user.profileUrl,
+      resolvedUrl,
       fit: BoxFit.cover,
       errorBuilder: (context, error, stackTrace) => _fallback(context),
     );

@@ -8,6 +8,7 @@ import '../../models/message_model.dart';
 import '../../models/user_model.dart';
 import '../../services/api_service.dart';
 import '../../services/mensaje_service.dart';
+import '../../widgets/profile_avatar.dart';
 import '../../widgets/user_avatar.dart';
 
 class ChatDetailScreen extends StatefulWidget {
@@ -409,6 +410,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final MensajeService _mensajeService = MensajeService();
+  final ImagePicker _backendImagePicker = ImagePicker();
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -566,6 +568,78 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _pickAndSendImage(ImageSource source) async {
+    if (_isSending) return;
+
+    final image = await _backendImagePicker.pickImage(
+      source: source,
+      maxWidth: 1800,
+      imageQuality: 82,
+      preferredCameraDevice: CameraDevice.rear,
+    );
+    if (image == null || !mounted) return;
+
+    setState(() => _isSending = true);
+    try {
+      await _mensajeService.enviarImagen(
+        conversacionId: widget.conversacionId,
+        remitenteId: widget.usuarioActualId,
+        bytes: await image.readAsBytes(),
+        filename: image.name,
+        contentType: _imageMimeType(image),
+      );
+      await _loadMessages(forceScroll: true);
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo enviar la foto.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  String _imageMimeType(XFile image) {
+    final reported = image.mimeType?.trim();
+    if (reported != null && reported.isNotEmpty) return reported;
+    final lower = image.name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    return 'image/jpeg';
+  }
+
+  void _showMessageImage(_BackendMessage message) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black,
+      builder: (context) => Dialog.fullscreen(
+        backgroundColor: Colors.black,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              child: Image.network(
+                ApiService.resolveMediaUrl(message.urlAdjunto),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -579,7 +653,7 @@ class _ChatScreenState extends State<ChatScreen> {
         titleSpacing: 0,
         title: Row(
           children: [
-            _ContactAvatar(
+            ProfileAvatar(
               name: widget.nombreContacto,
               imageUrl: widget.fotoContactoUrl ?? '',
               radius: 18,
@@ -690,15 +764,53 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                     ),
-                  Text(
-                    message.contenido,
-                    style: TextStyle(
-                      color: isMine
-                          ? colorScheme.onPrimary
-                          : colorScheme.onSurface,
-                      fontSize: 15,
+                  if (message.hasImage) ...[
+                    GestureDetector(
+                      onTap: () => _showMessageImage(message),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            minWidth: 180,
+                            maxWidth: 420,
+                            maxHeight: 420,
+                          ),
+                          child: Image.network(
+                            ApiService.resolveMediaUrl(message.urlAdjunto),
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, progress) =>
+                                progress == null
+                                ? child
+                                : const SizedBox(
+                                    width: 220,
+                                    height: 180,
+                                    child: Center(
+                                      child: CircularProgressIndicator(),
+                                    ),
+                                  ),
+                            errorBuilder: (_, _, _) => const SizedBox(
+                              width: 220,
+                              height: 120,
+                              child: Center(
+                                child: Icon(Icons.broken_image_outlined),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                  ],
+                  if (!message.hasImage || message.contenido != 'Foto')
+                    Text(
+                      message.contenido,
+                      style: TextStyle(
+                        color: isMine
+                            ? colorScheme.onPrimary
+                            : colorScheme.onSurface,
+                        fontSize: 15,
+                      ),
+                    ),
                   const SizedBox(height: 4),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -756,6 +868,20 @@ class _ChatScreenState extends State<ChatScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Tomar foto',
+                    onPressed: _isSending
+                        ? null
+                        : () => _pickAndSendImage(ImageSource.camera),
+                    icon: const Icon(Icons.camera_alt_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Elegir foto de la galería',
+                    onPressed: _isSending
+                        ? null
+                        : () => _pickAndSendImage(ImageSource.gallery),
+                    icon: const Icon(Icons.photo_library_outlined),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _controller,
@@ -865,6 +991,7 @@ class _BackendMessage {
   final String remitenteId;
   final String remitenteNombre;
   final String conversacionId;
+  final String urlAdjunto;
   final String estado;
 
   const _BackendMessage({
@@ -876,6 +1003,7 @@ class _BackendMessage {
     required this.remitenteId,
     required this.remitenteNombre,
     required this.conversacionId,
+    required this.urlAdjunto,
     required this.estado,
   });
 
@@ -900,9 +1028,12 @@ class _BackendMessage {
       remitenteId: _text(map['remitenteId']),
       remitenteNombre: _text(map['remitenteNombre']),
       conversacionId: _text(map['conversacionId']),
+      urlAdjunto: _text(map['urlAdjunto']),
       estado: _text(map['estado']),
     );
   }
+
+  bool get hasImage => tipoMensaje == 'IMAGEN_URL' && urlAdjunto.isNotEmpty;
 
   static String _text(Object? value, {String fallback = ''}) {
     final text = value?.toString().trim() ?? '';
@@ -932,61 +1063,5 @@ class _BackendMessage {
     }
 
     return '${parsedDate.day}/${parsedDate.month}/${parsedDate.year} $time';
-  }
-}
-
-class _ContactAvatar extends StatelessWidget {
-  const _ContactAvatar({
-    required this.name,
-    required this.imageUrl,
-    required this.radius,
-  });
-
-  final String name;
-  final String imageUrl;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    final trimmedUrl = imageUrl.trim();
-
-    return SizedBox.square(
-      dimension: radius * 2,
-      child: ClipOval(
-        child: trimmedUrl.isEmpty
-            ? _fallback(context)
-            : Image.network(
-                trimmedUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) =>
-                    _fallback(context),
-              ),
-      ),
-    );
-  }
-
-  Widget _fallback(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final initials = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part.characters.first.toUpperCase())
-        .join();
-
-    return ColoredBox(
-      color: colorScheme.primaryContainer,
-      child: Center(
-        child: Text(
-          initials.isEmpty ? '?' : initials,
-          style: TextStyle(
-            color: colorScheme.onPrimaryContainer,
-            fontSize: radius * 0.55,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
   }
 }

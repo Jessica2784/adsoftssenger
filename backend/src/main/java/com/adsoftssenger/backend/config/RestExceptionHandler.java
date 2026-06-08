@@ -1,6 +1,7 @@
 package com.adsoftssenger.backend.config;
 
 import com.adsoftssenger.backend.dto.ApiError;
+import com.adsoftssenger.backend.exception.CloudinaryUploadException;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -38,6 +39,11 @@ public class RestExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> handleDataIntegrity(DataIntegrityViolationException exception) {
         return buildResponse(HttpStatus.CONFLICT, "Los datos enviados generan un conflicto", List.of());
+    }
+
+    @ExceptionHandler(CloudinaryUploadException.class)
+    public ResponseEntity<ApiError> handleCloudinaryUpload(CloudinaryUploadException exception) {
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, exception.getMessage(), List.of());
     }
 
     private ResponseEntity<ApiError> buildResponse(HttpStatus status, String message, List<String> details) {
