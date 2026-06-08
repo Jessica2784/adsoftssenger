@@ -13,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -29,8 +29,10 @@ public class MediaController {
     @PostMapping(path = "/profile-photo/{usuarioId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MediaProfilePhotoResponse> uploadProfilePhoto(
             @PathVariable Long usuarioId,
-            @RequestPart("file") MultipartFile file
+            @RequestParam("file") MultipartFile file
     ) {
+        logProfilePhotoUpload(usuarioId, file);
+
         Usuario usuario = usuarioService.obtenerEntidadPorId(usuarioId);
         String fotoPerfilUrl = cloudinaryService.uploadProfilePhoto(file, usuario.getId());
         Usuario usuarioActualizado = usuarioService.guardarFotoPerfilUrl(usuario, fotoPerfilUrl);
@@ -45,8 +47,10 @@ public class MediaController {
     @PostMapping(path = "/stories/{usuarioId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MediaStoryResponse> uploadStoryImage(
             @PathVariable Long usuarioId,
-            @RequestPart("file") MultipartFile file
+            @RequestParam("file") MultipartFile file
     ) {
+        logStoryUpload(usuarioId, file);
+
         Usuario usuario = usuarioService.obtenerEntidadPorId(usuarioId);
         String imagenUrl = cloudinaryService.uploadStoryImage(file, usuario.getId());
         HistoriaDTO historia = historiaService.crearHistoriaCloudinary(usuario, imagenUrl, file.getContentType());
@@ -59,5 +63,25 @@ public class MediaController {
                 .fechaCreacion(historia.getFechaCreacion())
                 .message("Historia subida correctamente")
                 .build());
+    }
+
+    private void logProfilePhotoUpload(Long usuarioId, MultipartFile file) {
+        System.out.println("=== INICIANDO SUBIDA FOTO PERFIL ===");
+        System.out.println("usuarioId: " + usuarioId);
+        System.out.println("file null?: " + (file == null));
+        System.out.println("file empty?: " + (file == null ? null : file.isEmpty()));
+        System.out.println("file name: " + (file == null ? null : file.getOriginalFilename()));
+        System.out.println("content type: " + (file == null ? null : file.getContentType()));
+        System.out.println("size: " + (file == null ? null : file.getSize()));
+    }
+
+    private void logStoryUpload(Long usuarioId, MultipartFile file) {
+        System.out.println("=== INICIANDO SUBIDA HISTORIA ===");
+        System.out.println("usuarioId: " + usuarioId);
+        System.out.println("file null?: " + (file == null));
+        System.out.println("file empty?: " + (file == null ? null : file.isEmpty()));
+        System.out.println("file name: " + (file == null ? null : file.getOriginalFilename()));
+        System.out.println("content type: " + (file == null ? null : file.getContentType()));
+        System.out.println("size: " + (file == null ? null : file.getSize()));
     }
 }

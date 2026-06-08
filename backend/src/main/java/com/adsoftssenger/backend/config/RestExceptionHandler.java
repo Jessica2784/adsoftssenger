@@ -9,8 +9,12 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @RestControllerAdvice
 public class RestExceptionHandler {
@@ -41,17 +45,56 @@ public class RestExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, "Los datos enviados generan un conflicto", List.of());
     }
 
+    @ExceptionHandler({
+            MissingServletRequestPartException.class,
+            MissingServletRequestParameterException.class,
+            MultipartException.class
+    })
+    public ResponseEntity<ApiError> handleMultipart(Exception exception) {
+        return buildResponse(
+                HttpStatus.BAD_REQUEST,
+                "Debes enviar la imagen en multipart/form-data usando el campo file",
+                exception.getMessage(),
+                List.of()
+        );
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleMaxUploadSize(MaxUploadSizeExceededException exception) {
+        return buildResponse(
+                HttpStatus.BAD_REQUEST,
+                "La imagen supera el tamaño permitido",
+                exception.getMessage(),
+                List.of()
+        );
+    }
+
     @ExceptionHandler(CloudinaryUploadException.class)
     public ResponseEntity<ApiError> handleCloudinaryUpload(CloudinaryUploadException exception) {
-        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, exception.getMessage(), List.of());
+        return buildResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                exception.getMessage(),
+                exception.getDetail(),
+                List.of()
+        );
     }
 
     private ResponseEntity<ApiError> buildResponse(HttpStatus status, String message, List<String> details) {
+        return buildResponse(status, message, null, details);
+    }
+
+    private ResponseEntity<ApiError> buildResponse(
+            HttpStatus status,
+            String message,
+            String detail,
+            List<String> details
+    ) {
         ApiError apiError = ApiError.builder()
                 .timestamp(LocalDateTime.now())
                 .status(status.value())
                 .error(status.getReasonPhrase())
                 .message(message)
+                .detail(detail)
                 .details(details)
                 .build();
 

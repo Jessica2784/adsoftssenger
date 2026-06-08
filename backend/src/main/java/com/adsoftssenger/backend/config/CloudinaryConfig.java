@@ -16,7 +16,7 @@ public class CloudinaryConfig {
             @Value("${CLOUDINARY_API_KEY:}") String apiKey,
             @Value("${CLOUDINARY_API_SECRET:}") String apiSecret
     ) {
-        return new CloudinaryCredentials(cloudName, apiKey, apiSecret);
+        return new CloudinaryCredentials(blankToNull(cloudName), blankToNull(apiKey), blankToNull(apiSecret));
     }
 
     @Bean
@@ -27,6 +27,10 @@ public class CloudinaryConfig {
                 "api_secret", credentials.apiSecret(),
                 "secure", true
         ));
+    }
+
+    private String blankToNull(String value) {
+        return StringUtils.hasText(value) ? value : null;
     }
 
     public record CloudinaryCredentials(String cloudName, String apiKey, String apiSecret) {

@@ -103,17 +103,21 @@ class _RegisterUserScreenState extends State<RegisterUserScreen> {
 
     try {
       await _mediaService.uploadProfilePhoto(usuarioId, File(image.path));
-    } catch (_) {
-      if (mounted) _showPhotoUploadError();
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo subir la foto. Intenta de nuevo.';
+      _showPhotoUploadError(message);
     }
   }
 
-  void _showPhotoUploadError() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('No se pudo subir la foto. Intenta de nuevo.'),
-      ),
-    );
+  void _showPhotoUploadError([
+    String message = 'No se pudo subir la foto. Intenta de nuevo.',
+  ]) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   int _intValue(Object? value) {

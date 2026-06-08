@@ -36,10 +36,11 @@ public class CloudinaryService {
     }
 
     private String uploadImage(MultipartFile file, String folder, String publicId, boolean overwrite) {
+        logCloudinaryConfig();
         validarImagen(file);
-        validarConfiguracion();
 
         try {
+            validarConfiguracion();
             Map<?, ?> uploadResult = cloudinary.uploader().upload(file.getBytes(), ObjectUtils.asMap(
                     "folder", folder,
                     "public_id", publicId,
@@ -47,21 +48,43 @@ public class CloudinaryService {
                     "overwrite", overwrite,
                     "invalidate", overwrite
             ));
+            System.out.println("Cloudinary response: " + uploadResult);
+
             Object secureUrl = uploadResult.get("secure_url");
+            System.out.println("secure_url: " + secureUrl);
             if (!(secureUrl instanceof String url) || !StringUtils.hasText(url)) {
-                throw new CloudinaryUploadException(CLOUDINARY_UPLOAD_ERROR);
+                throw new CloudinaryUploadException(
+                        CLOUDINARY_UPLOAD_ERROR,
+                        "Cloudinary no devolvio secure_url"
+                );
             }
             return url;
         } catch (CloudinaryUploadException exception) {
+            exception.printStackTrace();
             throw exception;
         } catch (IOException | RuntimeException exception) {
+            exception.printStackTrace();
             throw new CloudinaryUploadException(CLOUDINARY_UPLOAD_ERROR, exception);
         }
     }
 
+    private void logCloudinaryConfig() {
+        String cloudName = credentials.cloudName();
+        String apiKey = credentials.apiKey();
+        String apiSecret = credentials.apiSecret();
+
+        System.out.println("=== ENTRANDO A CLOUDINARY SERVICE ===");
+        System.out.println("cloud name configurado?: " + (cloudName != null));
+        System.out.println("api key configurado?: " + (apiKey != null));
+        System.out.println("api secret configurado?: " + (apiSecret != null));
+    }
+
     private void validarConfiguracion() {
         if (!credentials.isComplete()) {
-            throw new CloudinaryUploadException(CLOUDINARY_UPLOAD_ERROR);
+            throw new CloudinaryUploadException(
+                    CLOUDINARY_UPLOAD_ERROR,
+                    "Faltan variables CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY o CLOUDINARY_API_SECRET"
+            );
         }
     }
 
@@ -72,8 +95,21 @@ public class CloudinaryService {
 
         String contentType = file.getContentType();
         String normalizedContentType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        if (!ALLOWED_IMAGE_TYPES.contains(normalizedContentType)) {
+        if (!ALLOWED_IMAGE_TYPES.contains(normalizedContentType) && !hasAllowedImageExtension(file)) {
             throw new IllegalArgumentException("El archivo debe ser una imagen JPEG, PNG o WEBP");
         }
+    }
+
+    private boolean hasAllowedImageExtension(MultipartFile file) {
+        String filename = file.getOriginalFilename();
+        if (!StringUtils.hasText(filename)) {
+            return false;
+        }
+
+        String normalizedFilename = filename.toLowerCase(Locale.ROOT);
+        return normalizedFilename.endsWith(".jpg")
+                || normalizedFilename.endsWith(".jpeg")
+                || normalizedFilename.endsWith(".png")
+                || normalizedFilename.endsWith(".webp");
     }
 }

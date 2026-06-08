@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/session_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/media_service.dart';
 import '../../widgets/image_source_sheet.dart';
 import '../../widgets/profile_avatar.dart';
@@ -62,14 +63,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Foto de perfil actualizada.')),
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() => _localPreviewBytes = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo subir la foto. Intenta de nuevo.'),
-        ),
-      );
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo subir la foto. Intenta de nuevo.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
