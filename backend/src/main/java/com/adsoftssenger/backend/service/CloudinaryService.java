@@ -21,7 +21,22 @@ public class CloudinaryService {
     private static final String PROFILE_PHOTOS_FOLDER = "adsoftssenger/profile_photos";
     private static final String STORIES_FOLDER = "adsoftssenger/stories";
     private static final String CLOUDINARY_UPLOAD_ERROR = "No se pudo subir la imagen a Cloudinary";
-    private static final Set<String> ALLOWED_IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
+    private static final Set<String> ALLOWED_IMAGE_TYPES = Set.of(
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp",
+            "image/heic",
+            "image/heif"
+    );
+    private static final Set<String> ALLOWED_IMAGE_EXTENSIONS = Set.of(
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+            ".heic",
+            ".heif"
+    );
 
     private final Cloudinary cloudinary;
     private final CloudinaryCredentials credentials;
@@ -94,22 +109,37 @@ public class CloudinaryService {
         }
 
         String contentType = file.getContentType();
+        String originalName = file.getOriginalFilename();
         String normalizedContentType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
-        if (!ALLOWED_IMAGE_TYPES.contains(normalizedContentType) && !hasAllowedImageExtension(file)) {
-            throw new IllegalArgumentException("El archivo debe ser una imagen JPEG, PNG o WEBP");
+        String extension = detectExtension(originalName);
+        boolean validContentType = ALLOWED_IMAGE_TYPES.contains(normalizedContentType)
+                || normalizedContentType.startsWith("image/");
+        boolean validExtension = ALLOWED_IMAGE_EXTENSIONS.contains(extension);
+
+        if (!validContentType && !validExtension) {
+            logInvalidImage(file, contentType, originalName, extension);
+            throw new IllegalArgumentException("Formato no compatible. Usa JPG, PNG, WEBP, HEIC o HEIF.");
         }
     }
 
-    private boolean hasAllowedImageExtension(MultipartFile file) {
-        String filename = file.getOriginalFilename();
+    private String detectExtension(String filename) {
         if (!StringUtils.hasText(filename)) {
-            return false;
+            return "";
         }
 
-        String normalizedFilename = filename.toLowerCase(Locale.ROOT);
-        return normalizedFilename.endsWith(".jpg")
-                || normalizedFilename.endsWith(".jpeg")
-                || normalizedFilename.endsWith(".png")
-                || normalizedFilename.endsWith(".webp");
+        String normalizedFilename = filename.toLowerCase(Locale.ROOT).trim();
+        int lastDot = normalizedFilename.lastIndexOf('.');
+        if (lastDot < 0 || lastDot == normalizedFilename.length() - 1) {
+            return "";
+        }
+        return normalizedFilename.substring(lastDot);
+    }
+
+    private void logInvalidImage(MultipartFile file, String contentType, String originalName, String extension) {
+        System.out.println("=== IMAGEN RECHAZADA POR FORMATO ===");
+        System.out.println("contentType recibido: " + contentType);
+        System.out.println("originalName: " + originalName);
+        System.out.println("size: " + file.getSize());
+        System.out.println("extension detectada: " + extension);
     }
 }

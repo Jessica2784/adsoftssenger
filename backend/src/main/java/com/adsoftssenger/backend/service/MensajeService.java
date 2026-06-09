@@ -19,6 +19,8 @@ import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -29,6 +31,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Transactional
 public class MensajeService {
 
+    private static final Logger log = LoggerFactory.getLogger(MensajeService.class);
     private static final long MAX_IMAGE_SIZE = 6L * 1024L * 1024L;
 
     private final MensajeRepository mensajeRepository;
@@ -58,6 +61,7 @@ public class MensajeService {
 
         Mensaje mensajeGuardado = mensajeRepository.save(mensaje);
         crearEstadosIniciales(mensajeGuardado, conversacion, remitente, fechaEnvio);
+        log.info("Mensaje {} enviado en conversacion {} por usuario {}", mensajeGuardado.getId(), conversacion.getId(), remitente.getId());
 
         return toDTO(mensajeGuardado, Estado.ENVIADO);
     }
@@ -80,10 +84,20 @@ public class MensajeService {
                     .fechaEnvio(fechaEnvio)
                     .build());
             crearEstadosIniciales(mensaje, conversacion, remitente, fechaEnvio);
+            log.info("Imagen mensaje {} enviada en conversacion {} por usuario {}", mensaje.getId(), conversacionId, remitenteId);
             return toDTO(mensaje, Estado.ENVIADO);
         } catch (IOException exception) {
             throw new IllegalArgumentException("No se pudo leer la imagen seleccionada");
         }
+    }
+
+    public void eliminarMensaje(Long mensajeId) {
+        Mensaje mensaje = mensajeRepository.findById(mensajeId)
+                .orElseThrow(() -> new EntityNotFoundException("Mensaje no encontrado con id " + mensajeId));
+        Long conversacionId = mensaje.getConversacion().getId();
+        estadoMensajeRepository.deleteByMensajeId(mensajeId);
+        mensajeRepository.delete(mensaje);
+        log.info("Mensaje {} eliminado de conversacion {}", mensajeId, conversacionId);
     }
 
     @Transactional(readOnly = true)

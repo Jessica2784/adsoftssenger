@@ -1,8 +1,13 @@
 package com.adsoftssenger.backend.service;
 
+import com.adsoftssenger.backend.dto.EnviarMensajeRequest;
 import com.adsoftssenger.backend.dto.HistoriaDTO;
+import com.adsoftssenger.backend.dto.MensajeDTO;
+import com.adsoftssenger.backend.dto.ResponderHistoriaRequest;
 import com.adsoftssenger.backend.model.Historia;
+import com.adsoftssenger.backend.model.Conversacion;
 import com.adsoftssenger.backend.model.HistoriaVista;
+import com.adsoftssenger.backend.model.TipoMensaje;
 import com.adsoftssenger.backend.model.Usuario;
 import com.adsoftssenger.backend.repository.HistoriaRepository;
 import com.adsoftssenger.backend.repository.HistoriaVistaRepository;
@@ -27,6 +32,8 @@ public class HistoriaService {
     private final HistoriaRepository historiaRepository;
     private final HistoriaVistaRepository historiaVistaRepository;
     private final UsuarioService usuarioService;
+    private final ConversacionService conversacionService;
+    private final MensajeService mensajeService;
 
     public HistoriaDTO crearHistoria(Long usuarioId, MultipartFile imagen) {
         Usuario usuario = usuarioService.obtenerEntidadPorId(usuarioId);
@@ -111,6 +118,33 @@ public class HistoriaService {
         }
         historiaVistaRepository.deleteByHistoriaId(historiaId);
         historiaRepository.delete(historia);
+    }
+
+
+    public MensajeDTO responderHistoria(Long historiaId, ResponderHistoriaRequest request) {
+        if (request == null || request.getUsuarioId() == null) {
+            throw new IllegalArgumentException("El usuario que responde es obligatorio");
+        }
+        if (!StringUtils.hasText(request.getRespuesta())) {
+            throw new IllegalArgumentException("Escribe una respuesta para enviar");
+        }
+
+        Historia historia = obtenerEntidadPorId(historiaId);
+        Long duenioId = historia.getUsuario().getId();
+        Long usuarioId = request.getUsuarioId();
+        if (duenioId.equals(usuarioId)) {
+            throw new IllegalArgumentException("No puedes responder tu propia historia");
+        }
+
+        String respuesta = request.getRespuesta().trim();
+        Conversacion conversacion = conversacionService.obtenerOCrearConversacionIndividual(usuarioId, duenioId);
+        EnviarMensajeRequest mensajeRequest = EnviarMensajeRequest.builder()
+                .conversacionId(conversacion.getId())
+                .remitenteId(usuarioId)
+                .contenido("Respondió a tu estado: " + respuesta)
+                .tipoMensaje(TipoMensaje.TEXTO)
+                .build();
+        return mensajeService.enviarMensaje(mensajeRequest);
     }
 
     @Transactional(readOnly = true)

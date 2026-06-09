@@ -3,16 +3,22 @@ package com.adsoftssenger.backend.service;
 import com.adsoftssenger.backend.dto.ConversacionDTO;
 import com.adsoftssenger.backend.dto.CrearConversacionRequest;
 import com.adsoftssenger.backend.model.Conversacion;
+import com.adsoftssenger.backend.model.Estado;
+import com.adsoftssenger.backend.model.EstadoMensaje;
 import com.adsoftssenger.backend.model.Usuario;
 import com.adsoftssenger.backend.repository.ConversacionRepository;
+import com.adsoftssenger.backend.repository.EstadoMensajeRepository;
 import com.adsoftssenger.backend.repository.MensajeRepository;
 import com.adsoftssenger.backend.repository.UsuarioRepository;
 import com.adsoftssenger.backend.repository.projection.UltimoMensajeResumen;
 import jakarta.persistence.EntityNotFoundException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,38 +27,86 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 public class ConversacionService {
 
+    private static final Logger log = LoggerFactory.getLogger(ConversacionService.class);
+
     private final ConversacionRepository conversacionRepository;
     private final UsuarioRepository usuarioRepository;
     private final MensajeRepository mensajeRepository;
+    private final EstadoMensajeRepository estadoMensajeRepository;
     private final UsuarioService usuarioService;
 
     public ConversacionDTO crearConversacion(CrearConversacionRequest request) {
         validarCrearConversacion(request);
+        Conversacion conversacion = obtenerOCrearConversacionIndividual(
+                request.getUsuario1Id(),
+                request.getUsuario2Id()
+        );
+        return toDTO(conversacion, request.getUsuario1Id());
+    }
 
-        Usuario usuario1 = obtenerUsuario(request.getUsuario1Id());
-        Usuario usuario2 = obtenerUsuario(request.getUsuario2Id());
+    public Conversacion obtenerOCrearConversacionIndividual(Long usuario1Id, Long usuario2Id) {
+        if (usuario1Id == null || usuario2Id == null) {
+            throw new IllegalArgumentException("Los ids de usuarios son obligatorios");
+        }
+        if (usuario1Id.equals(usuario2Id)) {
+            throw new IllegalArgumentException("La conversacion requiere dos usuarios diferentes");
+        }
+
+        Usuario usuario1 = obtenerUsuario(usuario1Id);
+        Usuario usuario2 = obtenerUsuario(usuario2Id);
 
         Conversacion conversacionExistente = buscarConversacionIndividual(usuario1, usuario2);
         if (conversacionExistente != null) {
-            return toDTO(conversacionExistente, usuario1.getId());
+            log.debug("Conversacion existente {} para usuarios {} y {}", conversacionExistente.getId(), usuario1Id, usuario2Id);
+            return conversacionExistente;
         }
 
         Conversacion conversacion = Conversacion.builder()
                 .esGrupal(false)
                 .participantes(new ArrayList<>(List.of(usuario1, usuario2)))
                 .build();
-
-        return toDTO(conversacionRepository.save(conversacion), usuario1.getId());
+        Conversacion guardada = conversacionRepository.save(conversacion);
+        log.info("Conversacion creada {} para usuarios {} y {}", guardada.getId(), usuario1Id, usuario2Id);
+        return guardada;
     }
 
     @Transactional(readOnly = true)
     public List<ConversacionDTO> listarConversacionesPorUsuario(Long usuarioId) {
         obtenerUsuario(usuarioId);
 
-        return conversacionRepository.findByParticipantesId(usuarioId)
+        List<ConversacionDTO> conversaciones = conversacionRepository.findByParticipantesId(usuarioId)
                 .stream()
                 .map(conversacion -> toDTO(conversacion, usuarioId))
+                .sorted(Comparator
+                        .comparing(
+                                ConversacionDTO::getFechaUltimoMensaje,
+                                Comparator.nullsLast(Comparator.reverseOrder())
+                        )
+                        .thenComparing(ConversacionDTO::getId, Comparator.reverseOrder()))
                 .toList();
+        log.debug("Conversaciones listadas para usuario {}: {}", usuarioId, conversaciones.size());
+        return conversaciones;
+    }
+
+    public void marcarConversacionComoLeida(Long conversacionId, Long usuarioId) {
+        Conversacion conversacion = obtenerEntidadPorId(conversacionId);
+        Usuario usuario = obtenerUsuario(usuarioId);
+        validarUsuarioEnConversacion(conversacion, usuario);
+
+        List<EstadoMensaje> noLeidos = estadoMensajeRepository
+                .findByMensajeConversacionIdAndDestinatarioIdAndEstadoNot(
+                        conversacionId,
+                        usuarioId,
+                        Estado.LEIDO
+                );
+
+        LocalDateTime now = LocalDateTime.now();
+        noLeidos.forEach(estadoMensaje -> {
+            estadoMensaje.setEstado(Estado.LEIDO);
+            estadoMensaje.setFechaActualizacion(now);
+        });
+        estadoMensajeRepository.saveAll(noLeidos);
+        log.info("Conversacion {} marcada como leida para usuario {}. Mensajes actualizados: {}", conversacionId, usuarioId, noLeidos.size());
     }
 
     @Transactional(readOnly = true)
@@ -64,6 +118,14 @@ public class ConversacionService {
     public ConversacionDTO toDTO(Conversacion conversacion, Long usuarioActualId) {
         Usuario contacto = obtenerContacto(conversacion, usuarioActualId);
         UltimoMensajeResumen ultimoMensaje = obtenerUltimoMensaje(conversacion);
+        int cantidadNoLeidos = usuarioActualId == null
+                ? 0
+                : Math.toIntExact(estadoMensajeRepository
+                        .countByMensajeConversacionIdAndDestinatarioIdAndEstadoNot(
+                                conversacion.getId(),
+                                usuarioActualId,
+                                Estado.LEIDO
+                        ));
 
         return ConversacionDTO.builder()
                 .id(conversacion.getId())
@@ -71,6 +133,8 @@ public class ConversacionService {
                 .fotoContactoUrl(contacto != null ? usuarioService.resolveFotoPerfilUrl(contacto) : null)
                 .ultimoMensaje(ultimoMensaje != null ? resolveUltimoMensaje(ultimoMensaje) : null)
                 .fechaUltimoMensaje(ultimoMensaje != null ? ultimoMensaje.getFechaEnvio() : null)
+                .tieneMensajesNoLeidos(cantidadNoLeidos > 0)
+                .cantidadMensajesNoLeidos(cantidadNoLeidos)
                 .build();
     }
 
@@ -103,6 +167,12 @@ public class ConversacionService {
         return conversacion.getParticipantes()
                 .stream()
                 .anyMatch(participante -> participante.getId().equals(usuario.getId()));
+    }
+
+    private void validarUsuarioEnConversacion(Conversacion conversacion, Usuario usuario) {
+        if (!contieneParticipante(conversacion, usuario)) {
+            throw new IllegalArgumentException("El usuario no pertenece a la conversacion");
+        }
     }
 
     private Usuario obtenerContacto(Conversacion conversacion, Long usuarioActualId) {

@@ -74,6 +74,19 @@ class ApiService {
     return _decodeMapResponse(response);
   }
 
+  Future<Map<String, dynamic>> putMap(
+    String endpoint,
+    Map<String, dynamic> body,
+  ) async {
+    final uri = _uri(endpoint);
+    final response = await _send(
+      'PUT',
+      uri,
+      _client.put(uri, headers: _headers, body: jsonEncode(body)),
+    );
+    return _decodeMapResponse(response);
+  }
+
   Future<Map<String, dynamic>> postMultipartMap(
     String endpoint, {
     required Uint8List bytes,
@@ -174,7 +187,7 @@ class ApiService {
       throw const ApiException(
         statusCode: 0,
         message:
-            'El servidor esta iniciando o tardando demasiado. Espera unos segundos y vuelve a intentar.',
+            'El servidor está iniciando, intenta de nuevo en unos segundos.',
       );
     } on http.ClientException catch (error) {
       foundation.debugPrint(
@@ -182,13 +195,13 @@ class ApiService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     } on Exception catch (error) {
       foundation.debugPrint('API unexpected error [$method $uri]: $error');
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     }
   }
@@ -210,7 +223,7 @@ class ApiService {
       throw const ApiException(
         statusCode: 0,
         message:
-            'El servidor esta iniciando o tardando demasiado. Espera unos segundos y vuelve a intentar.',
+            'El servidor está iniciando, intenta de nuevo en unos segundos.',
       );
     } on http.ClientException catch (error) {
       foundation.debugPrint(
@@ -218,13 +231,13 @@ class ApiService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     } on Exception catch (error) {
       foundation.debugPrint('API unexpected error [$method $uri]: $error');
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     }
   }
@@ -318,10 +331,10 @@ class ApiService {
       return 'Credenciales incorrectas o acceso no autorizado.';
     }
     if (statusCode == 404) {
-      return 'No se encontro el recurso solicitado en el servidor. Actualiza o intenta de nuevo.';
+      return 'Esta función no está disponible en el servidor. Despliega el backend actualizado en Render e intenta de nuevo.';
     }
     if (statusCode >= 500) {
-      return 'El servidor tuvo un problema. Intenta de nuevo en unos segundos.';
+      return 'El servidor está iniciando, intenta de nuevo en unos segundos.';
     }
 
     return 'No se pudo completar la solicitud. Intenta de nuevo.';

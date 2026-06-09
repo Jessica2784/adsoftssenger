@@ -74,6 +74,18 @@ class HistoriaService {
     return _apiService.delete('/historias/$historiaId?usuarioId=$usuarioId');
   }
 
+  Future<Map<String, dynamic>> responderHistoria({
+    required Object historiaId,
+    required Object usuarioId,
+    required String respuesta,
+  }) {
+    final encodedHistoriaId = Uri.encodeComponent(historiaId.toString());
+    return _apiService.postMap('/stories/$encodedHistoriaId/responder', {
+      'usuarioId': usuarioId,
+      'respuesta': respuesta,
+    });
+  }
+
   String _extensionFor(String filename, String contentType) {
     final lowerFilename = filename.toLowerCase();
     final lowerContentType = contentType.toLowerCase();

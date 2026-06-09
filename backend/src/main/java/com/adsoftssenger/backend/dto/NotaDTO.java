@@ -12,13 +12,13 @@ import lombok.Setter;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ConversacionDTO {
+public class NotaDTO {
 
     private Long id;
-    private String nombreContacto;
-    private String fotoContactoUrl;
-    private String ultimoMensaje;
-    private LocalDateTime fechaUltimoMensaje;
-    private Boolean tieneMensajesNoLeidos;
-    private Integer cantidadMensajesNoLeidos;
+    private Long usuarioId;
+    private String nombreMostrar;
+    private String nombreUsuario;
+    private String fotoPerfilUrl;
+    private String contenido;
+    private LocalDateTime fechaCreacion;
 }

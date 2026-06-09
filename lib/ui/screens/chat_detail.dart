@@ -7,6 +7,7 @@ import '../../data/dummy_data.dart';
 import '../../models/message_model.dart';
 import '../../models/user_model.dart';
 import '../../services/api_service.dart';
+import '../../services/conversacion_service.dart';
 import '../../services/mensaje_service.dart';
 import '../../widgets/profile_avatar.dart';
 import '../../widgets/user_avatar.dart';
@@ -410,6 +411,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final MensajeService _mensajeService = MensajeService();
+  final ConversacionService _conversacionService = ConversacionService();
   final ImagePicker _backendImagePicker = ImagePicker();
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -426,6 +428,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(_markConversationRead());
     _loadMessages(showLoading: true, forceScroll: true);
     _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       _loadMessages();
@@ -438,6 +441,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _controller.dispose();
     _mensajeService.close();
+    _conversacionService.close();
     super.dispose();
   }
 
@@ -494,6 +498,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _isLoading = false;
       });
 
+      unawaited(_markConversationRead());
+
       if (shouldScroll) {
         _scrollToBottom();
       }
@@ -516,6 +522,49 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _reloadMessages() {
     _loadMessages(forceScroll: true);
+  }
+
+  Future<void> _markConversationRead() async {
+    try {
+      await _conversacionService.marcarComoLeida(
+        widget.conversacionId,
+        widget.usuarioActualId,
+      );
+    } catch (error) {
+      debugPrint('No se pudo marcar conversacion como leida: $error');
+    }
+  }
+
+  Future<void> _confirmDeleteMessage(_BackendMessage message) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar mensaje'),
+        content: const Text('¿Quieres eliminar este mensaje?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldDelete != true) return;
+    try {
+      await _mensajeService.eliminarMensaje(message.id);
+      await _loadMessages(forceScroll: true);
+    } catch (error) {
+      if (!mounted) return;
+      final text = error is ApiException
+          ? error.message
+          : 'No se pudo eliminar el mensaje.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    }
   }
 
   void _scrollToBottom() {
@@ -728,117 +777,124 @@ class _ChatScreenState extends State<ChatScreen> {
             ? 520.0
             : constraints.maxWidth * 0.78;
 
-        return Align(
-          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxBubbleWidth),
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: isMine
-                    ? colorScheme.primary
-                    : colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: Radius.circular(isMine ? 18 : 4),
-                  bottomRight: Radius.circular(isMine ? 4 : 18),
+        return GestureDetector(
+          onLongPress: () => _confirmDeleteMessage(message),
+          child: Align(
+            alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
                 ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!isMine)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 3),
-                      child: Text(
-                        message.remitenteNombre.isEmpty
-                            ? widget.nombreContacto
-                            : message.remitenteNombre,
-                        style: TextStyle(
-                          color: colorScheme.onSurfaceVariant,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
+                decoration: BoxDecoration(
+                  color: isMine ? null : colorScheme.surfaceContainerHighest,
+                  gradient: isMine
+                      ? const LinearGradient(
+                          colors: [Color(0xFF0A84FF), Color(0xFF8E24FF)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        )
+                      : null,
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(18),
+                    topRight: const Radius.circular(18),
+                    bottomLeft: Radius.circular(isMine ? 18 : 4),
+                    bottomRight: Radius.circular(isMine ? 4 : 18),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!isMine)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        child: Text(
+                          message.remitenteNombre.isEmpty
+                              ? widget.nombreContacto
+                              : message.remitenteNombre,
+                          style: TextStyle(
+                            color: colorScheme.onSurfaceVariant,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                    ),
-                  if (message.hasImage) ...[
-                    GestureDetector(
-                      onTap: () => _showMessageImage(message),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            minWidth: 180,
-                            maxWidth: 420,
-                            maxHeight: 420,
-                          ),
-                          child: Image.network(
-                            ApiService.resolveMediaUrl(message.urlAdjunto),
-                            fit: BoxFit.cover,
-                            loadingBuilder: (context, child, progress) =>
-                                progress == null
-                                ? child
-                                : const SizedBox(
-                                    width: 220,
-                                    height: 180,
-                                    child: Center(
-                                      child: CircularProgressIndicator(),
+                    if (message.hasImage) ...[
+                      GestureDetector(
+                        onTap: () => _showMessageImage(message),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              minWidth: 180,
+                              maxWidth: 420,
+                              maxHeight: 420,
+                            ),
+                            child: Image.network(
+                              ApiService.resolveMediaUrl(message.urlAdjunto),
+                              fit: BoxFit.cover,
+                              loadingBuilder: (context, child, progress) =>
+                                  progress == null
+                                  ? child
+                                  : const SizedBox(
+                                      width: 220,
+                                      height: 180,
+                                      child: Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
                                     ),
-                                  ),
-                            errorBuilder: (_, _, _) => const SizedBox(
-                              width: 220,
-                              height: 120,
-                              child: Center(
-                                child: Icon(Icons.broken_image_outlined),
+                              errorBuilder: (_, _, _) => const SizedBox(
+                                width: 220,
+                                height: 120,
+                                child: Center(
+                                  child: Icon(Icons.broken_image_outlined),
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                  ],
-                  if (!message.hasImage || message.contenido != 'Foto')
-                    Text(
-                      message.contenido,
-                      style: TextStyle(
-                        color: isMine
-                            ? colorScheme.onPrimary
-                            : colorScheme.onSurface,
-                        fontSize: 15,
-                      ),
-                    ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+                      const SizedBox(height: 6),
+                    ],
+                    if (!message.hasImage || message.contenido != 'Foto')
                       Text(
-                        message.fechaEnvioTexto,
+                        message.contenido,
                         style: TextStyle(
-                          color: isMine
-                              ? colorScheme.onPrimary.withValues(alpha: 0.75)
-                              : colorScheme.onSurfaceVariant,
-                          fontSize: 11,
+                          color: isMine ? Colors.white : colorScheme.onSurface,
+                          fontSize: 15,
                         ),
                       ),
-                      if (isMine && message.estado.isNotEmpty) ...[
-                        const SizedBox(width: 8),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                         Text(
-                          message.estado,
+                          message.fechaEnvioTexto,
                           style: TextStyle(
-                            color: colorScheme.onPrimary.withValues(
-                              alpha: 0.75,
-                            ),
+                            color: isMine
+                                ? Colors.white.withValues(alpha: 0.78)
+                                : colorScheme.onSurfaceVariant,
                             fontSize: 11,
                           ),
                         ),
+                        if (isMine && message.estado.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            message.estado,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.78),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -873,14 +929,19 @@ class _ChatScreenState extends State<ChatScreen> {
                     onPressed: _isSending
                         ? null
                         : () => _pickAndSendImage(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt_outlined),
+                    icon: const Icon(Icons.add_circle_outline),
                   ),
                   IconButton(
-                    tooltip: 'Elegir foto de la galería',
+                    tooltip: 'Elegir foto',
                     onPressed: _isSending
                         ? null
                         : () => _pickAndSendImage(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library_outlined),
+                    icon: const Icon(Icons.image_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Micrófono',
+                    onPressed: null,
+                    icon: const Icon(Icons.mic_none),
                   ),
                   Expanded(
                     child: TextField(

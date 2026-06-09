@@ -1,12 +1,13 @@
 package com.adsoftssenger.backend.controller;
 
-import com.adsoftssenger.backend.dto.CrearConversacionRequest;
-import com.adsoftssenger.backend.service.ConversacionService;
+import com.adsoftssenger.backend.dto.NotaRequest;
+import com.adsoftssenger.backend.service.NotaService;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,50 +17,65 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/conversaciones")
+@RequestMapping("/api/notas")
 @RequiredArgsConstructor
-public class ConversacionController {
+public class NotaController {
 
-    private final ConversacionService conversacionService;
+    private final NotaService notaService;
 
-    @PostMapping
-    public ResponseEntity<?> crearConversacion(@RequestBody CrearConversacionRequest request) {
+    @PostMapping("/{usuarioId}")
+    public ResponseEntity<?> crearNota(@PathVariable Long usuarioId, @RequestBody NotaRequest request) {
         try {
-            return ResponseEntity.status(HttpStatus.CREATED).body(conversacionService.crearConversacion(request));
+            return ResponseEntity.status(HttpStatus.CREATED).body(notaService.crearNota(usuarioId, request));
         } catch (EntityNotFoundException exception) {
             return notFound(exception.getMessage());
         } catch (IllegalArgumentException exception) {
             return badRequest(exception.getMessage());
         } catch (Exception exception) {
-            return serverError("No se pudo crear la conversacion");
+            return serverError("No se pudo crear la nota");
+        }
+    }
+
+    @GetMapping("/activas")
+    public ResponseEntity<?> listarNotasActivas() {
+        try {
+            return ResponseEntity.ok(notaService.listarNotasActivas());
+        } catch (Exception exception) {
+            return serverError("No se pudieron cargar las notas");
         }
     }
 
     @GetMapping("/usuario/{usuarioId}")
-    public ResponseEntity<?> listarConversacionesPorUsuario(@PathVariable Long usuarioId) {
+    public ResponseEntity<?> listarNotasPorUsuario(@PathVariable Long usuarioId) {
         try {
-            return ResponseEntity.ok(conversacionService.listarConversacionesPorUsuario(usuarioId));
+            return ResponseEntity.ok(notaService.listarNotasPorUsuario(usuarioId));
         } catch (EntityNotFoundException exception) {
             return notFound(exception.getMessage());
         } catch (Exception exception) {
-            return serverError("No se pudieron listar las conversaciones");
+            return serverError("No se pudieron cargar las notas del usuario");
         }
     }
 
-    @PutMapping("/{conversacionId}/leer/{usuarioId}")
-    public ResponseEntity<?> marcarConversacionComoLeida(
-            @PathVariable Long conversacionId,
-            @PathVariable Long usuarioId
-    ) {
+    @PutMapping("/{notaId}/desactivar")
+    public ResponseEntity<?> desactivarNota(@PathVariable Long notaId) {
         try {
-            conversacionService.marcarConversacionComoLeida(conversacionId, usuarioId);
-            return ResponseEntity.ok(Map.of("mensaje", "Conversacion marcada como leida"));
+            return ResponseEntity.ok(notaService.desactivarNota(notaId));
         } catch (EntityNotFoundException exception) {
             return notFound(exception.getMessage());
-        } catch (IllegalArgumentException exception) {
-            return badRequest(exception.getMessage());
         } catch (Exception exception) {
-            return serverError("No se pudo marcar la conversacion como leida");
+            return serverError("No se pudo desactivar la nota");
+        }
+    }
+
+    @DeleteMapping("/{notaId}")
+    public ResponseEntity<?> eliminarNota(@PathVariable Long notaId) {
+        try {
+            notaService.eliminarNota(notaId);
+            return ResponseEntity.ok(Map.of("mensaje", "Nota eliminada"));
+        } catch (EntityNotFoundException exception) {
+            return notFound(exception.getMessage());
+        } catch (Exception exception) {
+            return serverError("No se pudo eliminar la nota");
         }
     }
 

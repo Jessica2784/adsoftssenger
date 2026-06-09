@@ -5,11 +5,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/api_user.dart';
+import '../../models/note_model.dart';
 import '../../models/story_model.dart';
 import '../../providers/session_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/conversacion_service.dart';
+import '../../services/historia_service.dart';
 import '../../services/media_service.dart';
+import '../../services/nota_service.dart';
 import '../../services/usuario_service.dart';
 import '../../widgets/image_source_sheet.dart';
 import '../../widgets/profile_avatar.dart';
@@ -28,15 +31,19 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
   final TextEditingController _searchController = TextEditingController();
   final UsuarioService _usuarioService = UsuarioService();
   final ConversacionService _conversacionService = ConversacionService();
+  final HistoriaService _historiaService = HistoriaService();
   final MediaService _mediaService = MediaService();
+  final NotaService _notaService = NotaService();
   final ImagePicker _imagePicker = ImagePicker();
 
   List<ApiUser> _users = [];
   List<StoryModel> _stories = [];
+  List<NoteModel> _notes = [];
   Object? _usersError;
   Object? _storiesError;
   int _selectedView = 0;
   int? _openingUserId;
+  int? _deletingStoryId;
   bool _isSearching = false;
   bool _usersLoading = true;
   bool _storiesLoading = false;
@@ -48,6 +55,7 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
   void initState() {
     super.initState();
     _loadUsers();
+    _loadNotes();
   }
 
   @override
@@ -55,7 +63,9 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     _searchController.dispose();
     _usuarioService.close();
     _conversacionService.close();
+    _historiaService.close();
     _mediaService.close();
+    _notaService.close();
     super.dispose();
   }
 
@@ -91,6 +101,16 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
         _usersError = error;
         _usersLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadNotes() async {
+    try {
+      final notes = await _notaService.obtenerNotasActivas();
+      if (!mounted) return;
+      setState(() => _notes = notes);
+    } catch (error) {
+      debugPrint('No se pudieron cargar notas en Personas: $error');
     }
   }
 
@@ -130,6 +150,7 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
   }
 
   void _refreshCurrentView() {
+    _loadNotes();
     if (_selectedView == 0) {
       _loadUsers();
     } else {
@@ -201,7 +222,10 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
                         _searchController.clear();
                       }
                     });
-                    if (selectedView == 1) _loadStories();
+                    if (selectedView == 1) {
+                      _loadStories();
+                      _loadNotes();
+                    }
                   },
                   showSelectedIcon: false,
                 ),
@@ -343,12 +367,6 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
   Future<_ConversationPreview> _obtenerOCrearConversacion(
     ApiUser contact,
   ) async {
-    final conversaciones = await _conversacionService
-        .obtenerConversacionesPorUsuario(_usuarioActualId);
-    for (final item in conversaciones) {
-      final conversation = _ConversationPreview.fromJson(item);
-      if (conversation.matchesContact(contact)) return conversation;
-    }
     final created = await _conversacionService.crearConversacion({
       'usuario1Id': _usuarioActualId,
       'usuario2Id': contact.id,
@@ -368,12 +386,13 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
       itemBuilder: (context, index) {
         final user = users[index];
         final isOpening = _openingUserId == user.id;
+        final note = _noteForUser(user.id);
         return ListTile(
           minVerticalPadding: 12,
-          leading: ProfileAvatar(
+          leading: _AvatarWithNote(
             name: user.nombreMostrar,
             imageUrl: user.fotoPerfilUrl,
-            radius: 28,
+            note: note,
             showOnlineIndicator: user.estadoActivo,
           ),
           title: Text(
@@ -382,7 +401,7 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Text('@${user.nombreUsuario}'),
+          subtitle: _ContactSubtitle(user: user, note: note),
           trailing: isOpening
               ? const SizedBox.square(
                   dimension: 22,
@@ -444,12 +463,14 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
 
   Widget _buildStoryTile(StoryModel story) {
     final colorScheme = Theme.of(context).colorScheme;
+    final note = _noteForUser(story.usuarioId);
+    final isDeleting = _deletingStoryId == story.id;
     return ListTile(
       minVerticalPadding: 12,
-      leading: ProfileAvatar(
+      leading: _AvatarWithNote(
         name: story.nombreMostrar,
         imageUrl: story.fotoPerfilUrl,
-        radius: 28,
+        note: note,
         showUnseenRing: !story.vista && !story.propia,
       ),
       title: Text(
@@ -458,11 +479,88 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
-      subtitle: Text(_relativeTime(story.fechaPublicacion)),
-      trailing: _StoryThumbnail(imageUrl: story.imagenUrl),
+      subtitle: _StorySubtitle(
+        timeText: _relativeTime(story.fechaPublicacion),
+        note: note,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _StoryThumbnail(imageUrl: story.imagenUrl),
+          if (story.propia) ...[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Eliminar estado',
+              onPressed: isDeleting ? null : () => _confirmDeleteStory(story),
+              icon: isDeleting
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.delete_outline, color: colorScheme.error),
+            ),
+          ],
+        ],
+      ),
       onTap: () => _openStory(story),
       iconColor: colorScheme.primary,
     );
+  }
+
+  Future<void> _confirmDeleteStory(StoryModel story) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar estado'),
+        content: const Text('¿Quieres eliminar este estado?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDelete != true) return;
+    await _deleteStory(story);
+  }
+
+  Future<void> _deleteStory(StoryModel story) async {
+    if (_deletingStoryId != null) return;
+    setState(() => _deletingStoryId = story.id);
+    try {
+      await _historiaService.eliminarHistoria(story.id, _usuarioActualId);
+      if (!mounted) return;
+      setState(() {
+        _stories = _stories
+            .where((item) => item.id != story.id)
+            .toList(growable: false);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Estado eliminado.')));
+    } catch (error) {
+      if (!mounted) return;
+      final message = error is ApiException
+          ? error.message
+          : 'No se pudo eliminar el estado.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _deletingStoryId = null);
+    }
+  }
+
+  NoteModel? _noteForUser(int usuarioId) {
+    for (final note in _notes) {
+      if (note.usuarioId == usuarioId) return note;
+    }
+    return null;
   }
 
   Future<void> _openStory(StoryModel story) async {
@@ -544,6 +642,153 @@ class _PeopleListScreenState extends State<PeopleListScreen> {
     if (difference.inHours < 1) return 'Hace ${difference.inMinutes} min';
     if (difference.inHours < 24) return 'Hace ${difference.inHours} h';
     return '${date.day}/${date.month}/${date.year}';
+  }
+}
+
+class _AvatarWithNote extends StatelessWidget {
+  const _AvatarWithNote({
+    required this.name,
+    required this.imageUrl,
+    required this.note,
+    this.showOnlineIndicator = false,
+    this.showUnseenRing = false,
+  });
+
+  final String name;
+  final String imageUrl;
+  final NoteModel? note;
+  final bool showOnlineIndicator;
+  final bool showUnseenRing;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 62,
+      height: 64,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: [
+          ProfileAvatar(
+            name: name,
+            imageUrl: imageUrl,
+            radius: 28,
+            showOnlineIndicator: showOnlineIndicator,
+            showUnseenRing: showUnseenRing,
+          ),
+          if (note != null)
+            Positioned(
+              top: -5,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 58),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  note!.contenido,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    height: 1.0,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ContactSubtitle extends StatelessWidget {
+  const _ContactSubtitle({required this.user, required this.note});
+
+  final ApiUser user;
+  final NoteModel? note;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '@${user.nombreUsuario}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (note != null) ...[
+          const SizedBox(height: 4),
+          _NotePill(text: note!.contenido),
+        ],
+      ],
+    );
+  }
+}
+
+class _StorySubtitle extends StatelessWidget {
+  const _StorySubtitle({required this.timeText, required this.note});
+
+  final String timeText;
+  final NoteModel? note;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(timeText),
+        if (note != null) ...[
+          const SizedBox(height: 4),
+          _NotePill(text: note!.contenido),
+        ],
+      ],
+    );
+  }
+}
+
+class _NotePill extends StatelessWidget {
+  const _NotePill({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 240),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: colorScheme.onSurfaceVariant,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
   }
 }
 

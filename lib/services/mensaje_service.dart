@@ -36,6 +36,11 @@ class MensajeService {
     return _apiService.getList('/mensajes/conversacion/$encodedConversacionId');
   }
 
+  Future<void> eliminarMensaje(Object mensajeId) {
+    final encodedMensajeId = Uri.encodeComponent(mensajeId.toString());
+    return _apiService.delete('/mensajes/$encodedMensajeId');
+  }
+
   void close() {
     _apiService.close();
   }

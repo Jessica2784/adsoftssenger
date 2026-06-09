@@ -73,13 +73,26 @@ class MediaService {
   }
 
   Future<void> _logUploadStart(Uri uri, int usuarioId, File imageFile) async {
+    final extension = _extensionFromPath(imageFile.path);
     print('=== SUBIENDO IMAGEN DESDE FLUTTER ===');
     print('URL: $uri');
     print('usuarioId: $usuarioId');
-    print('path: ${imageFile.path}');
+    print('imageFile.path: ${imageFile.path}');
+    print('extension archivo: $extension');
     final exists = await imageFile.exists();
     print('existe archivo: $exists');
     print('tamaño archivo: ${exists ? await imageFile.length() : 0}');
+  }
+
+  String _extensionFromPath(String path) {
+    final lowerPath = path.trim().toLowerCase();
+    final lastSlash = lowerPath.lastIndexOf('/');
+    final filename = lastSlash >= 0
+        ? lowerPath.substring(lastSlash + 1)
+        : lowerPath;
+    final lastDot = filename.lastIndexOf('.');
+    if (lastDot < 0 || lastDot == filename.length - 1) return '';
+    return filename.substring(lastDot);
   }
 
   Uri _uri(String endpoint) {
@@ -104,7 +117,7 @@ class MediaService {
       throw const ApiException(
         statusCode: 0,
         message:
-            'Tiempo de espera agotado. Revisa tu conexion e intenta de nuevo.',
+            'El servidor está iniciando, intenta de nuevo en unos segundos.',
       );
     } on SocketException catch (error) {
       foundation.debugPrint(
@@ -112,7 +125,7 @@ class MediaService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     } on http.ClientException catch (error) {
       foundation.debugPrint(
@@ -120,7 +133,7 @@ class MediaService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     }
   }
@@ -141,7 +154,7 @@ class MediaService {
       throw const ApiException(
         statusCode: 0,
         message:
-            'Tiempo de espera agotado. Revisa tu conexion e intenta de nuevo.',
+            'El servidor está iniciando, intenta de nuevo en unos segundos.',
       );
     } on SocketException catch (error) {
       foundation.debugPrint(
@@ -149,7 +162,7 @@ class MediaService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     } on http.ClientException catch (error) {
       foundation.debugPrint(
@@ -157,7 +170,7 @@ class MediaService {
       );
       throw const ApiException(
         statusCode: 0,
-        message: 'No se pudo conectar con el servidor. Intenta de nuevo.',
+        message: 'No se pudo conectar con el servidor.',
       );
     }
   }
@@ -239,10 +252,10 @@ class MediaService {
       return 'No tienes permiso para realizar esta accion.';
     }
     if (statusCode == 404) {
-      return 'No se encontro el recurso en el servidor. Actualiza la app o intenta de nuevo.';
+      return 'Esta función no está disponible en el servidor. Despliega el backend actualizado en Render e intenta de nuevo.';
     }
     if (statusCode >= 500) {
-      return 'El servidor tuvo un problema al procesar la imagen. Intenta de nuevo.';
+      return 'El servidor está iniciando, intenta de nuevo en unos segundos.';
     }
     return 'No se pudo completar la solicitud. Intenta de nuevo.';
   }
